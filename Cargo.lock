@@ -110,6 +110,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dravyn-common",
  "dravyn-core",
 ]
 
@@ -120,6 +121,9 @@ version = "0.1.0"
 [[package]]
 name = "dravyn-core"
 version = "0.1.0"
+dependencies = [
+ "dravyn-common",
+]
 
 [[package]]
 name = "dravyn-network"

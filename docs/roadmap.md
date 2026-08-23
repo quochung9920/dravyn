@@ -12,19 +12,22 @@ Status: complete.
 - CI validation
 - local install helper
 
-## M1 - Upstream Chromium
+## M1 - Chromium Foundation
 
-Status: in progress.
+Status: implementation complete; full local Chromium build not yet verified.
 
-- install/update `depot_tools`
-- fetch Chromium outside the repository
-- install Linux build dependencies
-- generate a low-symbol build configuration
-- compile `chrome`
-- launch through WSLg
-- detect source/build from `dravyn doctor`
+- install/update `depot_tools` (`dravyn chromium bootstrap`)
+- fetch Chromium outside the repository under `$DRAVYN_HOME`
+- official Linux dependency installation with explicit sudo announcement
+- documented GN configuration (`browser/config/args.gn`)
+- resource-aware `chrome` build (RAM-based job limiting)
+- launch through WSLg with a clean dev profile
+- real state detection surfaced through `dravyn doctor` and
+  `dravyn chromium status`
 
-Success condition: an upstream Chromium build produced from the Dravyn workflow opens through WSLg and is recognized by `dravyn doctor`.
+Success condition: an upstream Chromium build produced from the Dravyn
+workflow opens through WSLg and is reported as `Build PASS / M1 PASS` by
+`dravyn doctor`.
 
 ## M2 - Profile Engine
 
@@ -33,6 +36,10 @@ Success condition: an upstream Chromium build produced from the Dravyn workflow 
 - start/stop lifecycle
 - persistent session tests
 - process locking and crash recovery baseline
+
+The launcher interface keeps future compatibility for: proxy configuration,
+locale, timezone policy, CDP port, extensions, startup URLs, and runtime
+flags.
 
 ## M3 - Network Engine
 
@@ -55,4 +62,5 @@ Success condition: an upstream Chromium build produced from the Dravyn workflow 
 - permission policy
 - WebRTC privacy controls
 - consistency tests
-- maintained Chromium patch series where upstream configuration is insufficient
+- maintained Chromium patch series where upstream configuration is
+  insufficient (`browser/patches/`)

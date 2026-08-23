@@ -11,6 +11,8 @@
 /browser/out/
 /.chromium/
 /depot_tools/
+/chromium/
+/out/
 
 # Local Dravyn data
 .dravyn/
