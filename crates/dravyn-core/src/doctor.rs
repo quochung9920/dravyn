@@ -1,23 +1,16 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use dravyn_common::Workspace;
+
+use crate::chromium::{self, ChromiumDetection};
 
 #[derive(Debug, Clone)]
 pub struct ToolStatus {
     pub name: &'static str,
     pub available: bool,
     pub version: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChromiumStatus {
-    pub depot_tools_available: bool,
-    pub source_available: bool,
-    pub build_available: bool,
-    pub depot_tools_root: PathBuf,
-    pub source_root: PathBuf,
-    pub browser_binary: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +21,8 @@ pub struct DoctorReport {
     pub memory_available_gib: Option<f64>,
     pub disk_free_gib: Option<f64>,
     pub tools: Vec<ToolStatus>,
-    pub chromium: ChromiumStatus,
+    pub chromium: ChromiumDetection,
+    pub workspace_root: std::path::PathBuf,
 }
 
 fn command_version(command: &str, args: &[&str]) -> Option<String> {
@@ -87,42 +81,15 @@ fn disk_free_gib() -> Option<f64> {
     Some(available_kib / 1024.0 / 1024.0)
 }
 
-fn default_depot_tools_root(home: &Path) -> PathBuf {
-    home.join(".local/share/dravyn/depot_tools")
-}
-
-fn default_chromium_source_root(home: &Path) -> PathBuf {
-    home.join(".cache/dravyn/chromium/src")
-}
-
-fn chromium_status() -> ChromiumStatus {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let depot_tools_root = env::var_os("DRAVYN_DEPOT_TOOLS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_depot_tools_root(&home));
-
-    let source_root = env::var_os("DRAVYN_CHROMIUM_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_chromium_source_root(&home));
-
-    let browser_binary = env::var_os("DRAVYN_CHROMIUM_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source_root.join("out/Dravyn/chrome"));
-
-    ChromiumStatus {
-        depot_tools_available: depot_tools_root.join("fetch").is_file(),
-        source_available: source_root.join("DEPS").is_file() && source_root.join(".git").exists(),
-        build_available: browser_binary.is_file(),
-        depot_tools_root,
-        source_root,
-        browser_binary,
-    }
-}
-
 pub fn run_doctor() -> DoctorReport {
+    let workspace = Workspace::from_env().unwrap_or_else(|_| {
+        Workspace::from_root(env::temp_dir().join("dravyn-unresolved-workspace"))
+    });
+
+    run_doctor_for_workspace(workspace)
+}
+
+pub fn run_doctor_for_workspace(workspace: Workspace) -> DoctorReport {
     let proc_version = fs::read_to_string("/proc/version").unwrap_or_default();
     let is_wsl = proc_version.to_lowercase().contains("microsoft");
     let wslg_available = env::var("WAYLAND_DISPLAY")
@@ -142,6 +109,8 @@ pub fn run_doctor() -> DoctorReport {
         check_tool("CMake", "cmake", &["--version"]),
     ];
 
+    let chromium = chromium::detect(&workspace);
+
     DoctorReport {
         is_wsl,
         wslg_available,
@@ -149,35 +118,66 @@ pub fn run_doctor() -> DoctorReport {
         memory_available_gib,
         disk_free_gib: disk_free_gib(),
         tools,
-        chromium: chromium_status(),
+        chromium,
+        workspace_root: workspace.root().to_path_buf(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn tool_status_is_constructible() {
-        let status = ToolStatus {
-            name: "Example",
-            available: true,
-            version: Some("1.0".into()),
-        };
-        assert!(status.available);
-        assert_eq!(status.name, "Example");
+    fn temp_workspace(tag: &str) -> Workspace {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock works")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "dravyn-doctor-test-{tag}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        Workspace::from_root(dir)
     }
 
     #[test]
-    fn default_paths_are_outside_the_repository() {
-        let home = Path::new("/home/dravyn-test");
+    fn doctor_report_aggregates_chromium_detection() {
+        let ws = temp_workspace("aggregate");
+        fs::create_dir_all(ws.depot_tools()).expect("mkdir");
+        fs::write(ws.depot_tools().join("fetch"), "#!/bin/sh\n").expect("fetch");
+
+        let report = run_doctor_for_workspace(ws.clone());
         assert_eq!(
-            default_depot_tools_root(home),
-            PathBuf::from("/home/dravyn-test/.local/share/dravyn/depot_tools")
+            report.chromium.state,
+            chromium::ChromiumState::DepotToolsReady
         );
-        assert_eq!(
-            default_chromium_source_root(home),
-            PathBuf::from("/home/dravyn-test/.cache/dravyn/chromium/src")
+        assert_eq!(report.workspace_root, ws.root());
+        assert!(report.tools.iter().any(|tool| tool.name == "Git"));
+        let _ = fs::remove_dir_all(ws.root());
+    }
+
+    #[test]
+    fn m1_is_ready_only_when_chromium_is_built() {
+        let ws = temp_workspace("m1");
+        let report = run_doctor_for_workspace(ws.clone());
+        assert_ne!(
+            report.chromium.state,
+            chromium::ChromiumState::Built,
+            "fresh workspace must not claim a build"
+        );
+        let _ = fs::remove_dir_all(ws.root());
+    }
+
+    #[test]
+    fn default_paths_stay_outside_the_repository() {
+        let ws = Workspace::from_root(Path::new("/home/dev").join(".cache/dravyn"));
+        assert!(ws.root().starts_with("/home/dev"));
+        assert!(
+            !ws.root()
+                .starts_with(env::current_dir().unwrap_or_default())
         );
     }
 }
