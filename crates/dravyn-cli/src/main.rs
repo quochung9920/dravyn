@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use dravyn_core::doctor::run_doctor;
 
 #[derive(Parser)]
-#[command(name = "dravyn", version = "0.0.1-dev", about = "Dravyn Browser Core")]
+#[command(name = "dravyn", version, about = "Dravyn Browser Core")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -17,6 +17,10 @@ enum Commands {
 
 fn status(ok: bool) -> &'static str {
     if ok { "PASS" } else { "MISSING" }
+}
+
+fn setup_status(ok: bool) -> &'static str {
+    if ok { "READY" } else { "NOT SETUP" }
 }
 
 fn main() -> Result<()> {
@@ -58,19 +62,36 @@ fn main() -> Result<()> {
 
             println!("\nChromium");
             println!("--------------------------------");
-            println!("Source           NOT SETUP");
-            println!("Build            NOT AVAILABLE");
+            println!(
+                "depot_tools      {}",
+                setup_status(report.chromium.depot_tools_available)
+            );
+            println!(
+                "Source           {}",
+                setup_status(report.chromium.source_available)
+            );
+            println!(
+                "Build            {}",
+                if report.chromium.build_available { "READY" } else { "NOT AVAILABLE" }
+            );
+            println!("Source root      {}", report.chromium.source_root.display());
+            println!("Browser binary   {}", report.chromium.browser_binary.display());
 
             let tools_ready = report.tools.iter().all(|tool| tool.available);
+            let m0_ready = report.is_wsl && report.wslg_available && tools_ready;
+            let m1_ready = report.chromium.depot_tools_available
+                && report.chromium.source_available
+                && report.chromium.build_available;
+
             println!("\nOverall");
             println!("--------------------------------");
-            println!("M0 environment   {}", status(report.is_wsl && report.wslg_available && tools_ready));
-            println!("M1 Chromium      NOT STARTED");
+            println!("M0 environment   {}", status(m0_ready));
+            println!("M1 Chromium      {}", if m1_ready { "PASS" } else { "NOT READY" });
         }
         None => {
             println!("🐉 Dravyn");
             println!("Browser Core Development Environment\n");
-            println!("Version: 0.0.1-dev\n");
+            println!("Version: {}\n", env!("CARGO_PKG_VERSION"));
             println!("Commands:");
             println!("  dravyn doctor");
         }

@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone)]
@@ -10,6 +11,16 @@ pub struct ToolStatus {
 }
 
 #[derive(Debug, Clone)]
+pub struct ChromiumStatus {
+    pub depot_tools_available: bool,
+    pub source_available: bool,
+    pub build_available: bool,
+    pub depot_tools_root: PathBuf,
+    pub source_root: PathBuf,
+    pub browser_binary: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct DoctorReport {
     pub is_wsl: bool,
     pub wslg_available: bool,
@@ -17,6 +28,7 @@ pub struct DoctorReport {
     pub memory_available_gib: Option<f64>,
     pub disk_free_gib: Option<f64>,
     pub tools: Vec<ToolStatus>,
+    pub chromium: ChromiumStatus,
 }
 
 fn command_version(command: &str, args: &[&str]) -> Option<String> {
@@ -75,6 +87,41 @@ fn disk_free_gib() -> Option<f64> {
     Some(available_kib / 1024.0 / 1024.0)
 }
 
+fn default_depot_tools_root(home: &Path) -> PathBuf {
+    home.join(".local/share/dravyn/depot_tools")
+}
+
+fn default_chromium_source_root(home: &Path) -> PathBuf {
+    home.join(".cache/dravyn/chromium/src")
+}
+
+fn chromium_status() -> ChromiumStatus {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let depot_tools_root = env::var_os("DRAVYN_DEPOT_TOOLS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_depot_tools_root(&home));
+
+    let source_root = env::var_os("DRAVYN_CHROMIUM_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_chromium_source_root(&home));
+
+    let browser_binary = env::var_os("DRAVYN_CHROMIUM_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| source_root.join("out/Dravyn/chrome"));
+
+    ChromiumStatus {
+        depot_tools_available: depot_tools_root.join("fetch").is_file(),
+        source_available: source_root.join("DEPS").is_file() && source_root.join(".git").exists(),
+        build_available: browser_binary.is_file(),
+        depot_tools_root,
+        source_root,
+        browser_binary,
+    }
+}
+
 pub fn run_doctor() -> DoctorReport {
     let proc_version = fs::read_to_string("/proc/version").unwrap_or_default();
     let is_wsl = proc_version.to_lowercase().contains("microsoft");
@@ -102,6 +149,7 @@ pub fn run_doctor() -> DoctorReport {
         memory_available_gib,
         disk_free_gib: disk_free_gib(),
         tools,
+        chromium: chromium_status(),
     }
 }
 
@@ -118,5 +166,18 @@ mod tests {
         };
         assert!(status.available);
         assert_eq!(status.name, "Example");
+    }
+
+    #[test]
+    fn default_paths_are_outside_the_repository() {
+        let home = Path::new("/home/dravyn-test");
+        assert_eq!(
+            default_depot_tools_root(home),
+            PathBuf::from("/home/dravyn-test/.local/share/dravyn/depot_tools")
+        );
+        assert_eq!(
+            default_chromium_source_root(home),
+            PathBuf::from("/home/dravyn-test/.cache/dravyn/chromium/src")
+        );
     }
 }
