@@ -1,0 +1,34 @@
+# Dravyn Chromium configuration of record (M1).
+#
+# This file documents the canonical values used by the scripts in
+# scripts/. The scripts keep their own constants for robustness; if you
+# change a path here, update the scripts and docs/chromium.md in the same
+# commit.
+
+[browser]
+target = "chrome"
+build_profile = "dev-lowmem" # see args.gn next to this file
+
+[channel]
+strategy = "upstream-stable-tip"
+# depot_tools 'fetch chromium' / 'gclient sync' track upstream main at the
+# time bootstrap is run. The resolved revision is recorded to
+# $DRAVYN_HOME/chromium/revision.txt so any build can be traced back to an
+# exact upstream commit.
+revision_record = "$DRAVYN_HOME/chromium/revision.txt"
+# Upgrade procedure: re-run `dravyn chromium bootstrap` (or
+# scripts/chromium-bootstrap.sh). It performs `gclient sync -D`, refreshes
+# build deps and hooks, and records the new revision. No revision is pinned
+# arbitrarily; reproducibility comes from the recorded revision.
+
+[checkout]
+depot_tools = "$DRAVYN_HOME/depot_tools"
+source = "$DRAVYN_HOME/chromium/src"
+
+[build]
+output_dir = "out/Dravyn" # relative to the Chromium source root
+binary = "out/Dravyn/chrome"
+jobs = "auto" # RAM-aware default; override with --jobs N or DRAVYN_BUILD_JOBS
+
+[runtime]
+dev_profile = "$DRAVYN_HOME/runtime/dev-profile"

@@ -1,0 +1,34 @@
+# Dravyn M1 GN arguments (development build, low-memory WSL host).
+# Consumed by scripts/chromium-configure.sh via `gn gen out/Dravyn`.
+#
+# Rationale for every choice:
+#
+# is_debug=false
+#   Release-speed baseline. Debug builds are far slower to run and link;
+#   M1 needs a usable browser, not step debugging.
+#
+# symbol_level=0 / blink_symbol_level=0 / v8_symbol_level=0
+#   No debug symbols. Cuts disk usage by tens of GiB and keeps linker
+#   memory low, which matters on the 15 GiB WSL guest. Re-enable
+#   temporarily when native debugging is required.
+#
+# is_component_build=true
+#   Component build: many small shared libraries instead of one huge
+#   static binary. Incremental relinks become seconds instead of minutes
+#   and peak link memory drops dramatically. This is the standard
+#   Chromium development configuration.
+#
+# enable_nacl=false
+#   Native Client is unused by Dravyn; disabling it removes a chunk of
+#   build time and toolchain downloads.
+#
+# use_remoteexec=false
+#   No remote execution backend is available locally.
+
+is_debug = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+is_component_build = true
+enable_nacl = false
+use_remoteexec = false
