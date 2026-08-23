@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Runtime
+/runtime/*
+!/runtime/.gitkeep
+
+# Chromium checkout/build
+/browser/chromium/
+/browser/out/
+/.chromium/
+/depot_tools/
+
+# Local Dravyn data
+.dravyn/
+profiles/
+logs/
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.log
