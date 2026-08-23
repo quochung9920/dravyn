@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/dravyn-cli",
+    "crates/dravyn-core",
+    "crates/dravyn-profile",
+    "crates/dravyn-network",
+    "crates/dravyn-common"
+]
