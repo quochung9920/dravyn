@@ -13,6 +13,6 @@ if command -v dravyn >/dev/null 2>&1; then
   dravyn --version
 else
   echo "Dravyn was installed by Cargo but is not on PATH." >&2
-  echo 'Ensure $HOME/.cargo/bin is present in PATH.' >&2
+  echo "Ensure $HOME/.cargo/bin is present in PATH." >&2
   exit 1
 fi

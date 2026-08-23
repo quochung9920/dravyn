@@ -3,6 +3,7 @@
 # This file is meant to be sourced, never executed directly.
 
 DRAVYN_SCRIPTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC2034  # used by the scripts that source this file
 DRAVYN_REPO_ROOT="$(dirname -- "$DRAVYN_SCRIPTS_DIR")"
 
 dravyn_info() { printf '[dravyn] %s\n' "$*"; }
@@ -37,6 +38,7 @@ dravyn_resolve_home() {
 
 # Populates DRAVYN_ROOT plus all derived Chromium workspace paths.
 # Values mirror browser/config/chromium.toml and crates/dravyn-common.
+# shellcheck disable=SC2034  # consumers source these variables
 dravyn_init_paths() {
   DRAVYN_ROOT="$(dravyn_resolve_home)" || dravyn_die \
     "Neither DRAVYN_HOME nor HOME is set. Export DRAVYN_HOME=/path/to/workspace and retry."
