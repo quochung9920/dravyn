@@ -1,5 +1,7 @@
 use crate::chromium;
 use dravyn_common::Workspace;
+use dravyn_network::{NetworkMode, probe_network};
+use dravyn_privacy::{NetworkGuardMode, apply_to_user_data};
 use dravyn_profile::{Profile, ProfileStore};
 use std::fmt;
 use std::fs;
@@ -10,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TERMINATION_WAIT: Duration = Duration::from_millis(50);
 const TERMINATION_ATTEMPTS: usize = 40;
+const NETWORK_PREFLIGHT_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStatus {
@@ -28,7 +31,11 @@ impl RuntimeStatus {
     }
 }
 
-pub fn status(workspace: &Workspace, store: &ProfileStore, profile: &Profile) -> Result<RuntimeStatus, RuntimeError> {
+pub fn status(
+    workspace: &Workspace,
+    store: &ProfileStore,
+    profile: &Profile,
+) -> Result<RuntimeStatus, RuntimeError> {
     let pid_path = pid_file(workspace, &profile.id);
     if !pid_path.is_file() {
         return Ok(RuntimeStatus::stopped());
@@ -72,12 +79,37 @@ pub fn launch(
         .network
         .validate()
         .map_err(|error| RuntimeError::Profile(error.to_string()))?;
+    profile
+        .privacy
+        .validate()
+        .map_err(|error| RuntimeError::PrivacyPolicy(error.to_string()))?;
+
+    if profile.privacy.network_guard == NetworkGuardMode::Strict
+        && profile.network.mode == NetworkMode::Proxy
+    {
+        let probe = probe_network(&profile.network, NETWORK_PREFLIGHT_TIMEOUT);
+        if probe.reachable != Some(true) {
+            return Err(RuntimeError::NetworkGuard(format!(
+                "strict network guard blocked launch: {}",
+                probe.message
+            )));
+        }
+    }
 
     let user_data = store
         .user_data_dir(&profile.id)
         .map_err(|error| RuntimeError::Profile(error.to_string()))?;
     fs::create_dir_all(&user_data)?;
     fs::create_dir_all(workspace.profile_runtime_dir())?;
+
+    let applied = apply_to_user_data(&user_data, &profile.privacy)
+        .map_err(|error| RuntimeError::PrivacyPolicy(error.to_string()))?;
+    if !applied.applied {
+        return Err(RuntimeError::PrivacyPolicy(format!(
+            "privacy policy verification failed before launch: {}",
+            applied.message
+        )));
+    }
 
     let mut command = Command::new(&detection.browser_binary);
     command
@@ -95,6 +127,10 @@ pub fn launch(
         .map_err(|error| RuntimeError::Profile(error.to_string()))?
     {
         command.arg(proxy_arg);
+    }
+
+    for argument in profile.privacy.chromium_arguments() {
+        command.arg(argument);
     }
 
     if let (Some(width), Some(height)) = (
@@ -156,7 +192,10 @@ fn send_signal(pid: u32, signal: &str) -> Result<(), RuntimeError> {
         if result.success() || !process_exists(pid) {
             Ok(())
         } else {
-            Err(RuntimeError::SignalFailed { pid, signal: signal.to_owned() })
+            Err(RuntimeError::SignalFailed {
+                pid,
+                signal: signal.to_owned(),
+            })
         }
     }
 
@@ -246,6 +285,8 @@ pub enum RuntimeError {
     BrowserNotBuilt(PathBuf),
     NoDisplay,
     Profile(String),
+    PrivacyPolicy(String),
+    NetworkGuard(String),
     InvalidPidFile(PathBuf),
     SignalFailed { pid: u32, signal: String },
     UnsupportedPlatform,
@@ -265,6 +306,10 @@ impl fmt::Display for RuntimeError {
                 "no GUI display detected; run Dravyn from a WSLg/desktop session"
             ),
             RuntimeError::Profile(message) => write!(f, "profile runtime error: {message}"),
+            RuntimeError::PrivacyPolicy(message) => {
+                write!(f, "privacy policy preflight failed: {message}")
+            }
+            RuntimeError::NetworkGuard(message) => write!(f, "network guard: {message}"),
             RuntimeError::InvalidPidFile(path) => {
                 write!(f, "invalid runtime pid file: {}", path.display())
             }
