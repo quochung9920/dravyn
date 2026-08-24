@@ -2,6 +2,17 @@ export type NetworkMode = "direct" | "proxy";
 export type ProxyScheme = "http" | "https" | "socks5";
 export type DiagnosticStatus = "ok" | "warning" | "error";
 export type FingerprintState = "not_audited" | "stable" | "review" | "drift";
+export type PrivacyPreset = "standard" | "balanced" | "strict" | "custom";
+export type NetworkGuardMode = "off" | "monitor" | "strict";
+export type WebRtcPolicy = "default" | "proxied_only";
+export type ExternalVerificationTest =
+  | "browserleaks_ip"
+  | "browserleaks_webrtc"
+  | "browserleaks_dns"
+  | "browserleaks_canvas"
+  | "browserleaks_webgl"
+  | "eff"
+  | "amiunique";
 
 export interface ProxyConfig {
   scheme: ProxyScheme;
@@ -12,6 +23,17 @@ export interface ProxyConfig {
 export interface NetworkConfig {
   mode: NetworkMode;
   proxy: ProxyConfig | null;
+}
+
+export interface PrivacyPolicy {
+  preset: PrivacyPreset;
+  network_guard: NetworkGuardMode;
+  webrtc: WebRtcPolicy;
+  block_third_party_cookies: boolean;
+  block_notifications: boolean;
+  block_geolocation: boolean;
+  block_camera: boolean;
+  block_microphone: boolean;
 }
 
 export interface BrowserConfig {
@@ -27,6 +49,7 @@ export interface Profile {
   tags: string[];
   browser: BrowserConfig;
   network: NetworkConfig;
+  privacy: PrivacyPolicy;
   created_at: number;
   updated_at: number;
 }
@@ -96,6 +119,7 @@ export interface ProfileDraft {
   tags: string[];
   browser: BrowserConfig;
   network: NetworkConfig;
+  privacy: PrivacyPolicy;
 }
 
 export interface AppStatus {
@@ -113,6 +137,29 @@ export interface NetworkProbe {
   valid: boolean;
   reachable: boolean | null;
   latency_ms: number | null;
+  message: string;
+}
+
+export interface PrivacyAppliedStatus {
+  preferences_path: string;
+  preferences_present: boolean;
+  applied: boolean;
+  expected_webrtc_policy: string;
+  actual_webrtc_policy: string | null;
+  third_party_cookies_blocked: boolean;
+  blocked_permission_count: number;
+  message: string;
+}
+
+export interface PrivacyStatus {
+  profile_id: string;
+  preset: string;
+  network_guard: string;
+  webrtc_policy: string;
+  policy_applied: PrivacyAppliedStatus;
+  network_probe: NetworkProbe;
+  overall_status: "critical" | "restart_required" | "verify_external";
+  external_verification_required: boolean;
   message: string;
 }
 

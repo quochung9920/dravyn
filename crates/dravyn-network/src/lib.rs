@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +112,94 @@ impl NetworkConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkProbeResult {
+    pub mode: String,
+    pub endpoint: Option<String>,
+    pub valid: bool,
+    pub reachable: Option<bool>,
+    pub latency_ms: Option<u64>,
+    pub message: String,
+}
+
+pub fn probe_network(config: &NetworkConfig, timeout: Duration) -> NetworkProbeResult {
+    if let Err(error) = config.validate() {
+        return NetworkProbeResult {
+            mode: "invalid".to_owned(),
+            endpoint: None,
+            valid: false,
+            reachable: None,
+            latency_ms: None,
+            message: error.to_string(),
+        };
+    }
+
+    match config.mode {
+        NetworkMode::Direct => NetworkProbeResult {
+            mode: "direct".to_owned(),
+            endpoint: None,
+            valid: true,
+            reachable: None,
+            latency_ms: None,
+            message: "Direct connection is configured. No proxy endpoint is required.".to_owned(),
+        },
+        NetworkMode::Proxy => {
+            let Some(proxy) = config.proxy.as_ref() else {
+                return NetworkProbeResult {
+                    mode: "invalid".to_owned(),
+                    endpoint: None,
+                    valid: false,
+                    reachable: None,
+                    latency_ms: None,
+                    message: "proxy settings are missing".to_owned(),
+                };
+            };
+            let endpoint = format!("{}://{}:{}", proxy.scheme.as_str(), proxy.host, proxy.port);
+            let addresses = match (proxy.host.as_str(), proxy.port).to_socket_addrs() {
+                Ok(addresses) => addresses.take(8).collect::<Vec<_>>(),
+                Err(error) => {
+                    return NetworkProbeResult {
+                        mode: "proxy".to_owned(),
+                        endpoint: Some(endpoint),
+                        valid: true,
+                        reachable: Some(false),
+                        latency_ms: None,
+                        message: format!("Failed to resolve proxy host: {error}"),
+                    };
+                }
+            };
+            if addresses.is_empty() {
+                return NetworkProbeResult {
+                    mode: "proxy".to_owned(),
+                    endpoint: Some(endpoint),
+                    valid: true,
+                    reachable: Some(false),
+                    latency_ms: None,
+                    message: "Proxy host resolved to no usable address.".to_owned(),
+                };
+            }
+
+            let started = Instant::now();
+            let reachable = addresses
+                .iter()
+                .any(|address| TcpStream::connect_timeout(address, timeout).is_ok());
+            let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            NetworkProbeResult {
+                mode: "proxy".to_owned(),
+                endpoint: Some(endpoint),
+                valid: true,
+                reachable: Some(reachable),
+                latency_ms: Some(latency_ms),
+                message: if reachable {
+                    "Proxy endpoint accepted a TCP connection. This proves endpoint reachability only; browser-side IP/DNS/WebRTC exposure still requires verification.".to_owned()
+                } else {
+                    "Proxy endpoint could not be reached within the configured preflight timeout.".to_owned()
+                },
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkError {
     message: String,
@@ -138,6 +228,14 @@ mod tests {
     #[test]
     fn direct_mode_has_no_chromium_proxy_argument() {
         assert_eq!(NetworkConfig::direct().chromium_argument().unwrap(), None);
+    }
+
+    #[test]
+    fn direct_probe_is_valid_without_endpoint() {
+        let probe = probe_network(&NetworkConfig::direct(), Duration::from_millis(5));
+        assert!(probe.valid);
+        assert_eq!(probe.mode, "direct");
+        assert_eq!(probe.reachable, None);
     }
 
     #[test]

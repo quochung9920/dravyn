@@ -2,9 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   DiagnosticItem,
+  ExternalVerificationTest,
   FingerprintHistoryEntry,
   FingerprintSnapshot,
   NetworkProbe,
+  PrivacyStatus,
   ProfileDraft,
   ProfileView,
 } from "./types";
@@ -39,6 +41,9 @@ export const api = {
   setFingerprintBaseline: (id: string) =>
     call<ProfileView>("set_fingerprint_baseline", { id }),
   networkProbe: (id: string) => call<NetworkProbe>("network_probe", { id }),
+  privacyStatus: (id: string) => call<PrivacyStatus>("privacy_status", { id }),
+  openExternalVerification: (id: string, test: ExternalVerificationTest) =>
+    call<ProfileView>("open_external_verification", { id, test }),
   systemDiagnostics: () => call<DiagnosticItem[]>("system_diagnostics"),
   openPrivacyAudit: (id: string) => call<ProfileView>("open_privacy_audit", { id }),
 };

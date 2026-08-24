@@ -1,5 +1,6 @@
 use dravyn_common::Workspace;
 use dravyn_network::NetworkConfig;
+use dravyn_privacy::PrivacyPolicy;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -45,6 +46,8 @@ pub struct Profile {
     pub browser: BrowserConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub privacy: PrivacyPolicy,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -57,6 +60,7 @@ pub struct ProfileDraft {
     pub tags: Vec<String>,
     pub browser: BrowserConfig,
     pub network: NetworkConfig,
+    pub privacy: PrivacyPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +137,7 @@ impl ProfileStore {
             tags: draft.tags,
             browser: draft.browser,
             network: draft.network,
+            privacy: draft.privacy,
             created_at: now,
             updated_at: now,
         };
@@ -153,6 +158,7 @@ impl ProfileStore {
             tags: draft.tags,
             browser: draft.browser,
             network: draft.network,
+            privacy: draft.privacy,
             created_at: current.created_at,
             updated_at: epoch_seconds(),
         };
@@ -233,6 +239,10 @@ fn normalize_and_validate_draft(mut draft: ProfileDraft) -> Result<ProfileDraft,
     )?;
     draft
         .network
+        .validate()
+        .map_err(|error| StoreError::Validation(error.to_string()))?;
+    draft
+        .privacy
         .validate()
         .map_err(|error| StoreError::Validation(error.to_string()))?;
     Ok(draft)
@@ -390,6 +400,7 @@ mod tests {
         let created = store.create(draft("Primary")).unwrap();
         assert!(store.user_data_dir(&created.id).unwrap().is_dir());
         assert_eq!(store.get(&created.id).unwrap().name, "Primary");
+        assert_eq!(store.get(&created.id).unwrap().privacy, PrivacyPolicy::default());
 
         let mut update = draft("Updated");
         update.notes = "note".to_owned();
