@@ -29,6 +29,9 @@ export interface NetworkConfig {
 }
 
 export interface PrivacyPolicy {
+  schema_version?: number;
+  policy_version?: number;
+  verification_max_age_hours?: number;
   preset: PrivacyPreset;
   network_guard: NetworkGuardMode;
   webrtc: WebRtcPolicy;
