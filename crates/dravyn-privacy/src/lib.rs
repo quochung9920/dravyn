@@ -125,12 +125,14 @@ pub fn apply_to_user_data(
 
     let mut root = if preferences_path.is_file() {
         let bytes = fs::read(&preferences_path)?;
-        serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|_| Value::Object(Map::new()))
+        serde_json::from_slice::<Value>(&bytes)?
     } else {
         Value::Object(Map::new())
     };
     if !root.is_object() {
-        root = Value::Object(Map::new());
+        return Err(PrivacyError::Validation(
+            "Chromium Preferences root must be a JSON object".to_owned(),
+        ));
     }
 
     set_path(
