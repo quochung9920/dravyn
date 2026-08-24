@@ -104,6 +104,7 @@ pub struct VerificationRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerificationSummary {
     pub profile_id: String,
+    pub policy_version: Option<u32>,
     pub record_count: usize,
     pub latest_test_count: usize,
     pub core_test_count: usize,
@@ -118,9 +119,10 @@ pub struct VerificationSummary {
 }
 
 impl VerificationSummary {
-    fn empty(profile_id: &str) -> Self {
+    fn empty(profile_id: &str, policy_version: Option<u32>) -> Self {
         Self {
             profile_id: profile_id.to_owned(),
+            policy_version,
             record_count: 0,
             latest_test_count: 0,
             core_test_count: 0,
@@ -197,46 +199,25 @@ impl VerificationStore {
 
     pub fn summary(&self, profile_id: &str) -> Result<VerificationSummary, VerificationError> {
         let history = self.history(profile_id, MAX_HISTORY)?;
-        if history.is_empty() {
-            return Ok(VerificationSummary::empty(profile_id));
-        }
+        Ok(summarize(profile_id, None, &history))
+    }
 
-        let mut latest: HashMap<VerificationTest, &VerificationRecord> = HashMap::new();
-        for record in &history {
-            latest.entry(record.test).or_insert(record);
+    pub fn summary_for_policy(
+        &self,
+        profile_id: &str,
+        policy_version: u32,
+    ) -> Result<VerificationSummary, VerificationError> {
+        if policy_version == 0 {
+            return Err(VerificationError::Validation(
+                "policy version must be at least 1".to_owned(),
+            ));
         }
-
-        let mut summary = VerificationSummary::empty(profile_id);
-        summary.record_count = history.len();
-        summary.latest_test_count = latest.len();
-        summary.last_verified_at = history.first().map(|record| record.verified_at);
-        for record in latest.values() {
-            if record.test.is_core() {
-                summary.core_test_count += 1;
-                if record.result == VerificationResult::Pass {
-                    summary.core_pass_count += 1;
-                }
-            }
-            match record.result {
-                VerificationResult::Pass => summary.pass_count += 1,
-                VerificationResult::Warning => summary.warning_count += 1,
-                VerificationResult::Critical => summary.critical_count += 1,
-                VerificationResult::Inconclusive => summary.inconclusive_count += 1,
-            }
-        }
-        summary.core_complete = summary.core_test_count == CORE_TEST_COUNT
-            && summary.core_pass_count == CORE_TEST_COUNT;
-        summary.state = if summary.critical_count > 0 {
-            VerificationState::Critical
-        } else if summary.warning_count > 0
-            || summary.inconclusive_count > 0
-            || !summary.core_complete
-        {
-            VerificationState::Review
-        } else {
-            VerificationState::Healthy
-        };
-        Ok(summary)
+        let history = self.history(profile_id, MAX_HISTORY)?;
+        let scoped = history
+            .into_iter()
+            .filter(|record| record.policy_version == policy_version)
+            .collect::<Vec<_>>();
+        Ok(summarize(profile_id, Some(policy_version), &scoped))
     }
 
     pub fn clear_profile(&self, profile_id: &str) -> Result<(), VerificationError> {
@@ -296,6 +277,53 @@ impl VerificationStore {
         }
         Ok(())
     }
+}
+
+fn summarize(
+    profile_id: &str,
+    policy_version: Option<u32>,
+    history: &[VerificationRecord],
+) -> VerificationSummary {
+    if history.is_empty() {
+        return VerificationSummary::empty(profile_id, policy_version);
+    }
+
+    let mut latest: HashMap<VerificationTest, &VerificationRecord> = HashMap::new();
+    for record in history {
+        latest.entry(record.test).or_insert(record);
+    }
+
+    let mut summary = VerificationSummary::empty(profile_id, policy_version);
+    summary.record_count = history.len();
+    summary.latest_test_count = latest.len();
+    summary.last_verified_at = history.first().map(|record| record.verified_at);
+    for record in latest.values() {
+        if record.test.is_core() {
+            summary.core_test_count += 1;
+            if record.result == VerificationResult::Pass {
+                summary.core_pass_count += 1;
+            }
+        }
+        match record.result {
+            VerificationResult::Pass => summary.pass_count += 1,
+            VerificationResult::Warning => summary.warning_count += 1,
+            VerificationResult::Critical => summary.critical_count += 1,
+            VerificationResult::Inconclusive => summary.inconclusive_count += 1,
+        }
+    }
+    summary.core_complete = summary.core_test_count == CORE_TEST_COUNT
+        && summary.core_pass_count == CORE_TEST_COUNT;
+    summary.state = if summary.critical_count > 0 {
+        VerificationState::Critical
+    } else if summary.warning_count > 0
+        || summary.inconclusive_count > 0
+        || !summary.core_complete
+    {
+        VerificationState::Review
+    } else {
+        VerificationState::Healthy
+    };
+    summary
 }
 
 fn normalize_draft(draft: &mut VerificationDraft) -> Result<(), VerificationError> {
@@ -428,7 +456,7 @@ mod tests {
         ] {
             store.record("profile-a", draft(test, VerificationResult::Pass)).unwrap();
         }
-        let summary = store.summary("profile-a").unwrap();
+        let summary = store.summary_for_policy("profile-a", 1).unwrap();
         assert!(summary.core_complete);
         assert_eq!(summary.core_pass_count, 4);
         assert_eq!(summary.state, VerificationState::Healthy);
@@ -443,9 +471,25 @@ mod tests {
                 draft(VerificationTest::BrowserleaksIp, VerificationResult::Pass),
             )
             .unwrap();
-        let summary = store.summary("profile-a").unwrap();
+        let summary = store.summary_for_policy("profile-a", 1).unwrap();
         assert!(!summary.core_complete);
         assert_eq!(summary.state, VerificationState::Review);
+    }
+
+    #[test]
+    fn new_policy_version_starts_unverified() {
+        let store = store("policy-scope");
+        for test in [
+            VerificationTest::BrowserleaksIp,
+            VerificationTest::BrowserleaksWebrtc,
+            VerificationTest::BrowserleaksDns,
+            VerificationTest::BrowserleaksIpv6,
+        ] {
+            store.record("profile-a", draft(test, VerificationResult::Pass)).unwrap();
+        }
+        let summary = store.summary_for_policy("profile-a", 2).unwrap();
+        assert_eq!(summary.state, VerificationState::Unverified);
+        assert_eq!(summary.record_count, 0);
     }
 
     #[test]
@@ -463,7 +507,7 @@ mod tests {
                 draft(VerificationTest::BrowserleaksIp, VerificationResult::Pass),
             )
             .unwrap();
-        let summary = store.summary("profile-a").unwrap();
+        let summary = store.summary_for_policy("profile-a", 1).unwrap();
         assert_eq!(summary.critical_count, 0);
         assert_eq!(summary.pass_count, 1);
     }
