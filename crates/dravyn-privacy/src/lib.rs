@@ -4,6 +4,20 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+pub const PRIVACY_SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    PRIVACY_SCHEMA_VERSION
+}
+
+fn default_policy_version() -> u32 {
+    1
+}
+
+fn default_verification_max_age_hours() -> u32 {
+    24
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PrivacyPreset {
@@ -43,6 +57,12 @@ impl WebRtcPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PrivacyPolicy {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default = "default_policy_version")]
+    pub policy_version: u32,
+    #[serde(default = "default_verification_max_age_hours")]
+    pub verification_max_age_hours: u32,
     pub preset: PrivacyPreset,
     pub network_guard: NetworkGuardMode,
     pub webrtc: WebRtcPolicy,
@@ -56,6 +76,9 @@ pub struct PrivacyPolicy {
 impl Default for PrivacyPolicy {
     fn default() -> Self {
         Self {
+            schema_version: PRIVACY_SCHEMA_VERSION,
+            policy_version: 1,
+            verification_max_age_hours: 24,
             preset: PrivacyPreset::Balanced,
             network_guard: NetworkGuardMode::Monitor,
             webrtc: WebRtcPolicy::Default,
@@ -71,6 +94,9 @@ impl Default for PrivacyPolicy {
 impl PrivacyPolicy {
     pub fn standard() -> Self {
         Self {
+            schema_version: PRIVACY_SCHEMA_VERSION,
+            policy_version: 1,
+            verification_max_age_hours: 72,
             preset: PrivacyPreset::Standard,
             network_guard: NetworkGuardMode::Off,
             webrtc: WebRtcPolicy::Default,
@@ -84,6 +110,9 @@ impl PrivacyPolicy {
 
     pub fn strict() -> Self {
         Self {
+            schema_version: PRIVACY_SCHEMA_VERSION,
+            policy_version: 1,
+            verification_max_age_hours: 8,
             preset: PrivacyPreset::Strict,
             network_guard: NetworkGuardMode::Strict,
             webrtc: WebRtcPolicy::ProxiedOnly,
@@ -95,7 +124,32 @@ impl PrivacyPolicy {
         }
     }
 
+    pub fn bump_version(&mut self) {
+        self.schema_version = PRIVACY_SCHEMA_VERSION;
+        self.policy_version = self.policy_version.saturating_add(1).max(1);
+    }
+
+    pub fn verification_max_age_secs(&self) -> u64 {
+        u64::from(self.verification_max_age_hours) * 60 * 60
+    }
+
     pub fn validate(&self) -> Result<(), PrivacyError> {
+        if self.schema_version != PRIVACY_SCHEMA_VERSION {
+            return Err(PrivacyError::Validation(format!(
+                "unsupported privacy schema version {}; expected {}",
+                self.schema_version, PRIVACY_SCHEMA_VERSION
+            )));
+        }
+        if self.policy_version == 0 {
+            return Err(PrivacyError::Validation(
+                "privacy policy version must be at least 1".to_owned(),
+            ));
+        }
+        if !(1..=720).contains(&self.verification_max_age_hours) {
+            return Err(PrivacyError::Validation(
+                "verification freshness must be between 1 and 720 hours".to_owned(),
+            ));
+        }
         if self.preset == PrivacyPreset::Strict && self.network_guard == NetworkGuardMode::Off {
             return Err(PrivacyError::Validation(
                 "strict privacy preset cannot disable the network guard".to_owned(),
@@ -249,9 +303,15 @@ pub fn inspect_user_data(
         third_party_cookies_blocked,
         blocked_permission_count,
         message: if applied {
-            "Stored Chromium preferences match the selected Dravyn privacy policy.".to_owned()
+            format!(
+                "Stored Chromium preferences match privacy policy v{}.",
+                policy.policy_version
+            )
         } else {
-            "Stored Chromium preferences do not fully match the selected privacy policy. Stop and relaunch the profile to re-apply it.".to_owned()
+            format!(
+                "Stored Chromium preferences do not fully match privacy policy v{}. Stop and relaunch the profile to re-apply it.",
+                policy.policy_version
+            )
         },
     })
 }
@@ -361,5 +421,12 @@ mod tests {
         let status = inspect_user_data(&root, &PrivacyPolicy::default()).unwrap();
         assert!(!status.preferences_present);
         assert!(!status.applied);
+    }
+
+    #[test]
+    fn strict_policy_requires_fresh_verification() {
+        let strict = PrivacyPolicy::strict();
+        assert_eq!(strict.verification_max_age_hours, 8);
+        assert_eq!(strict.verification_max_age_secs(), 28_800);
     }
 }
