@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 dravyn-common = { version = "0.1.0", path = "../dravyn-common" }
+dravyn-network = { version = "0.1.0", path = "../dravyn-network" }
+dravyn-privacy = { version = "0.1.0", path = "../dravyn-privacy" }
 dravyn-profile = { version = "0.1.0", path = "../dravyn-profile" }
