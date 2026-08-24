@@ -1,6 +1,6 @@
 use dravyn_common::Workspace;
 use dravyn_network::NetworkConfig;
-use dravyn_privacy::PrivacyPolicy;
+use dravyn_privacy::{PrivacyPolicy, PRIVACY_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -126,7 +126,9 @@ impl ProfileStore {
     }
 
     pub fn create(&self, draft: ProfileDraft) -> Result<Profile, StoreError> {
-        let draft = normalize_and_validate_draft(draft)?;
+        let mut draft = normalize_and_validate_draft(draft)?;
+        draft.privacy.schema_version = PRIVACY_SCHEMA_VERSION;
+        draft.privacy.policy_version = 1;
         self.ensure_layout()?;
 
         let now = epoch_seconds();
@@ -150,7 +152,13 @@ impl ProfileStore {
 
     pub fn update(&self, id: &str, draft: ProfileDraft) -> Result<Profile, StoreError> {
         let current = self.get(id)?;
-        let draft = normalize_and_validate_draft(draft)?;
+        let mut draft = normalize_and_validate_draft(draft)?;
+        draft.privacy.schema_version = PRIVACY_SCHEMA_VERSION;
+        draft.privacy.policy_version = if privacy_semantics_equal(&current.privacy, &draft.privacy) {
+            current.privacy.policy_version
+        } else {
+            current.privacy.policy_version.saturating_add(1).max(1)
+        };
         let updated = Profile {
             id: current.id,
             name: draft.name,
@@ -206,6 +214,18 @@ impl ProfileStore {
         fs::rename(&temporary, &path)?;
         Ok(())
     }
+}
+
+fn privacy_semantics_equal(left: &PrivacyPolicy, right: &PrivacyPolicy) -> bool {
+    left.verification_max_age_hours == right.verification_max_age_hours
+        && left.preset == right.preset
+        && left.network_guard == right.network_guard
+        && left.webrtc == right.webrtc
+        && left.block_third_party_cookies == right.block_third_party_cookies
+        && left.block_notifications == right.block_notifications
+        && left.block_geolocation == right.block_geolocation
+        && left.block_camera == right.block_camera
+        && left.block_microphone == right.block_microphone
 }
 
 fn read_profile(path: &Path) -> Result<Profile, StoreError> {
@@ -407,12 +427,24 @@ mod tests {
         let updated = store.update(&created.id, update).unwrap();
         assert_eq!(updated.name, "Updated");
         assert_eq!(updated.notes, "note");
+        assert_eq!(updated.privacy.policy_version, 1);
 
         store.delete(&created.id).unwrap();
         assert!(matches!(
             store.get(&created.id),
             Err(StoreError::NotFound(_))
         ));
+        let _ = fs::remove_dir_all(store.workspace().root());
+    }
+
+    #[test]
+    fn privacy_change_bumps_policy_version() {
+        let store = temp_store("privacy-version");
+        let created = store.create(draft("Primary")).unwrap();
+        let mut update = draft("Primary");
+        update.privacy = PrivacyPolicy::strict();
+        let updated = store.update(&created.id, update).unwrap();
+        assert_eq!(updated.privacy.policy_version, 2);
         let _ = fs::remove_dir_all(store.workspace().root());
     }
 
