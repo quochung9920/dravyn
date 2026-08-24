@@ -94,7 +94,7 @@ fi
 cd "$CHROMIUM_SRC_DIR"
 
 dravyn_info "Building 'chrome' with $JOBS parallel jobs (this can take hours on a laptop/WSL)"
-autoninja -C "$BUILD_OUTPUT_REL" chrome
+autoninja -C "$BUILD_OUTPUT_REL" -j "$JOBS" chrome
 
 echo
 dravyn_info "Build complete: $CHROME_BIN"
