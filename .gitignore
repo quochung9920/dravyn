@@ -17,6 +17,7 @@ apps/desktop/src-tauri/Cargo.lock
 !/runtime/.gitkeep
 .dravyn/
 profiles/
+fingerprints/
 logs/
 **/*.pid
 **/.cache/
