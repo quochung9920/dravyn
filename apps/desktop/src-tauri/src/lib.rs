@@ -23,7 +23,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const PRIVACY_AUDIT_HTML: &str = include_str!("../privacy_audit.html");
 const MAX_HTTP_REQUEST_BYTES: usize = 256 * 1024;
 const NETWORK_PROBE_TIMEOUT: Duration = Duration::from_millis(1_500);
-const VERIFICATION_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Serialize)]
 struct RuntimeView {
@@ -151,7 +150,7 @@ fn view(
         .summary(&profile.id)
         .map_err(|error| error.to_string())?;
     let verification = verification_store(workspace)
-        .summary(&profile.id)
+        .summary_for_policy(&profile.id, profile.privacy.policy_version)
         .map_err(|error| error.to_string())?;
     Ok(ProfileView {
         profile,
@@ -169,9 +168,9 @@ fn enum_label<T: std::fmt::Debug>(value: T) -> String {
     format!("{value:?}").to_lowercase()
 }
 
-fn verification_is_stale(summary: &VerificationSummary) -> bool {
+fn verification_is_stale(summary: &VerificationSummary, max_age_secs: u64) -> bool {
     match summary.last_verified_at {
-        Some(last) => epoch_seconds().saturating_sub(last) > VERIFICATION_MAX_AGE_SECS,
+        Some(last) => epoch_seconds().saturating_sub(last) > max_age_secs,
         None => true,
     }
 }
@@ -307,16 +306,20 @@ fn verification_history(id: String) -> Result<Vec<VerificationRecord>, String> {
 #[tauri::command]
 fn verification_summary(id: String) -> Result<VerificationSummary, String> {
     let (workspace, profiles, _) = context()?;
-    profiles.get(&id).map_err(|error| error.to_string())?;
+    let profile = profiles.get(&id).map_err(|error| error.to_string())?;
     verification_store(&workspace)
-        .summary(&id)
+        .summary_for_policy(&id, profile.privacy.policy_version)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn record_verification(id: String, draft: VerificationDraft) -> Result<VerificationRecord, String> {
+fn record_verification(
+    id: String,
+    mut draft: VerificationDraft,
+) -> Result<VerificationRecord, String> {
     let (workspace, profiles, _) = context()?;
-    profiles.get(&id).map_err(|error| error.to_string())?;
+    let profile = profiles.get(&id).map_err(|error| error.to_string())?;
+    draft.policy_version = profile.privacy.policy_version;
     verification_store(&workspace)
         .record(&id, draft)
         .map_err(|error| error.to_string())
@@ -340,9 +343,12 @@ fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
         .map_err(|error| error.to_string())?;
     let network_probe = probe_network(&profile.network, NETWORK_PROBE_TIMEOUT);
     let verification = verification_store(&workspace)
-        .summary(&profile.id)
+        .summary_for_policy(&profile.id, profile.privacy.policy_version)
         .map_err(|error| error.to_string())?;
-    let verification_stale = verification_is_stale(&verification);
+    let verification_stale = verification_is_stale(
+        &verification,
+        profile.privacy.verification_max_age_secs(),
+    );
 
     let strict_proxy_failure = profile.privacy.network_guard == NetworkGuardMode::Strict
         && profile.network.mode == NetworkMode::Proxy
@@ -363,28 +369,38 @@ fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
         (
             "critical".to_owned(),
             true,
-            "The latest external verification journal contains a critical result. Review it before treating this profile as healthy.".to_owned(),
+            "The current privacy-policy verification journal contains a critical result. Review it before treating this profile as healthy.".to_owned(),
+        )
+    } else if verification.state == VerificationState::Review && !verification.core_complete {
+        (
+            "verify_external".to_owned(),
+            true,
+            "Local policy is applied, but the current policy version still needs passing Public IP, WebRTC, DNS and IPv6 verification results.".to_owned(),
         )
     } else if verification.state == VerificationState::Review {
         (
             "review".to_owned(),
             true,
-            "Local policy is applied, but the latest external verification results contain warnings or inconclusive checks.".to_owned(),
+            "Local policy is applied, but the current policy-version verification results contain warnings or inconclusive checks.".to_owned(),
         )
-    } else if verification.state == VerificationState::Unverified
-        || verification_stale
-        || verification.latest_test_count < 4
-    {
+    } else if verification.state == VerificationState::Unverified || verification_stale {
         (
             "verify_external".to_owned(),
             true,
-            "Local privacy policy is applied. Complete or refresh external verification for public IP, WebRTC, DNS and IPv6 before considering the profile verified.".to_owned(),
+            format!(
+                "Local privacy policy v{} is applied. Complete or refresh external verification for Public IP, WebRTC, DNS and IPv6 within this profile's {} hour verification window.",
+                profile.privacy.policy_version,
+                profile.privacy.verification_max_age_hours
+            ),
         )
     } else {
         (
             "healthy".to_owned(),
             false,
-            "Local policy is applied and the current verification journal has no warning or critical results. Re-verify after material environment, browser or network changes.".to_owned(),
+            format!(
+                "Privacy policy v{} is applied and its current core verification journal has no warning or critical result. Re-verify after material browser, network, OS or policy changes.",
+                profile.privacy.policy_version
+            ),
         )
     };
 
