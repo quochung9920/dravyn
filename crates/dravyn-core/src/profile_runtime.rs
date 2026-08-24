@@ -226,7 +226,21 @@ fn send_signal(pid: u32, signal: &str) -> Result<(), RuntimeError> {
 fn process_exists(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
-        Path::new("/proc").join(pid.to_string()).exists()
+        let process_dir = Path::new("/proc").join(pid.to_string());
+        if !process_dir.exists() {
+            return false;
+        }
+
+        // A killed child can remain briefly as a zombie until its parent/reaper
+        // collects it. Zombies no longer execute or hold network sockets, so the
+        // runtime should treat them as stopped instead of timing out the shield.
+        let Ok(stat) = fs::read_to_string(process_dir.join("stat")) else {
+            return true;
+        };
+        let state = stat
+            .rfind(") ")
+            .and_then(|index| stat[index + 2..].chars().next());
+        state != Some('Z')
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -239,6 +253,9 @@ fn process_exists(pid: u32) -> bool {
 fn process_matches_profile(pid: u32, browser_binary: &Path, user_data: &Path) -> bool {
     #[cfg(target_os = "linux")]
     {
+        if !process_exists(pid) {
+            return false;
+        }
         let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) else {
             return false;
         };
