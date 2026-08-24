@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
+
+const MAX_PROBE_ADDRESSES: usize = 4;
+const MAX_CONNECT_SLICE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +76,10 @@ impl ProxyConfig {
             self.port
         ))
     }
+
+    pub fn endpoint_label(&self) -> String {
+        format!("{}://{}:{}", self.scheme.as_str(), self.host.trim(), self.port)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -109,6 +116,10 @@ impl NetworkConfig {
                 Ok(Some(format!("--proxy-server={}", proxy.chromium_value()?)))
             }
         }
+    }
+
+    pub fn endpoint_label(&self) -> Option<String> {
+        self.proxy.as_ref().map(ProxyConfig::endpoint_label)
     }
 }
 
@@ -154,9 +165,9 @@ pub fn probe_network(config: &NetworkConfig, timeout: Duration) -> NetworkProbeR
                     message: "proxy settings are missing".to_owned(),
                 };
             };
-            let endpoint = format!("{}://{}:{}", proxy.scheme.as_str(), proxy.host, proxy.port);
+            let endpoint = proxy.endpoint_label();
             let addresses = match (proxy.host.as_str(), proxy.port).to_socket_addrs() {
-                Ok(addresses) => addresses.take(8).collect::<Vec<_>>(),
+                Ok(addresses) => addresses.take(MAX_PROBE_ADDRESSES).collect::<Vec<_>>(),
                 Err(error) => {
                     return NetworkProbeResult {
                         mode: "proxy".to_owned(),
@@ -180,9 +191,7 @@ pub fn probe_network(config: &NetworkConfig, timeout: Duration) -> NetworkProbeR
             }
 
             let started = Instant::now();
-            let reachable = addresses
-                .iter()
-                .any(|address| TcpStream::connect_timeout(address, timeout).is_ok());
+            let reachable = connect_any_with_budget(&addresses, timeout, started);
             let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
             NetworkProbeResult {
                 mode: "proxy".to_owned(),
@@ -191,13 +200,45 @@ pub fn probe_network(config: &NetworkConfig, timeout: Duration) -> NetworkProbeR
                 reachable: Some(reachable),
                 latency_ms: Some(latency_ms),
                 message: if reachable {
-                    "Proxy endpoint accepted a TCP connection. This proves endpoint reachability only; browser-side IP/DNS/WebRTC exposure still requires verification.".to_owned()
+                    "Proxy endpoint accepted a TCP connection within the bounded preflight budget. This proves endpoint reachability only; browser-side IP/DNS/IPv6/WebRTC exposure still requires verification.".to_owned()
                 } else {
-                    "Proxy endpoint could not be reached within the configured preflight timeout.".to_owned()
+                    format!(
+                        "Proxy endpoint could not be reached within the {} ms preflight budget.",
+                        timeout.as_millis()
+                    )
                 },
             }
         }
     }
+}
+
+fn connect_any_with_budget(
+    addresses: &[SocketAddr],
+    timeout: Duration,
+    started: Instant,
+) -> bool {
+    if timeout.is_zero() {
+        return false;
+    }
+
+    for (index, address) in addresses.iter().enumerate() {
+        let elapsed = started.elapsed();
+        let Some(remaining) = timeout.checked_sub(elapsed) else {
+            break;
+        };
+        if remaining.is_zero() {
+            break;
+        }
+
+        let attempts_left = addresses.len().saturating_sub(index).max(1) as u128;
+        let fair_share_ms = (remaining.as_millis() / attempts_left).max(1);
+        let slice_ms = fair_share_ms.min(MAX_CONNECT_SLICE.as_millis()).min(u64::MAX as u128);
+        let connect_timeout = Duration::from_millis(slice_ms as u64);
+        if TcpStream::connect_timeout(address, connect_timeout).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,6 +293,10 @@ mod tests {
             config.chromium_argument().unwrap().as_deref(),
             Some("--proxy-server=http://127.0.0.1:8080")
         );
+        assert_eq!(
+            config.endpoint_label().as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
     }
 
     #[test]
@@ -271,5 +316,15 @@ mod tests {
             port: 8080,
         };
         assert!(proxy.validate().is_err());
+    }
+
+    #[test]
+    fn zero_budget_never_attempts_a_connection() {
+        let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        assert!(!connect_any_with_budget(
+            &[address],
+            Duration::ZERO,
+            Instant::now()
+        ));
     }
 }

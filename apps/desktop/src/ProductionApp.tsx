@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CommercialApp from "./CommercialApp";
 import { api } from "./api";
-import type { AppStatus, DiagnosticItem, ProfileView } from "./types";
+import type {
+  AppStatus,
+  DiagnosticItem,
+  NetworkShieldStatus,
+  ProfileView,
+} from "./types";
 
-const ONBOARDING_KEY = "dravyn.m7.onboarding.dismissed";
-const ACTIVITY_KEY = "dravyn.m7.activity";
-const MAX_ACTIVITY = 80;
+const ONBOARDING_KEY = "dravyn.m8.onboarding.dismissed";
+const ACTIVITY_KEY = "dravyn.m8.activity";
+const MAX_ACTIVITY = 100;
 
 type ActivityLevel = "info" | "warning" | "critical" | "success";
 
@@ -20,6 +25,7 @@ type ActivityEvent = {
 type Snapshot = {
   profiles: ProfileView[];
   diagnostics: DiagnosticItem[];
+  shields: Record<string, NetworkShieldStatus>;
 };
 
 function readActivity(): ActivityEvent[] {
@@ -45,14 +51,26 @@ function relativeTime(timestamp: number) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+function relativeEpoch(timestamp: number | null) {
+  return timestamp ? relativeTime(timestamp * 1000) : "Not checked";
+}
+
 function displayState(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function shieldTone(state: NetworkShieldStatus["state"]): ActivityLevel {
+  if (state === "tripped") return "critical";
+  if (state === "degraded") return "warning";
+  if (state === "healthy") return "success";
+  return "info";
 }
 
 export default function ProductionApp() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [profiles, setProfiles] = useState<ProfileView[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([]);
+  const [shields, setShields] = useState<Record<string, NetworkShieldStatus>>({});
   const [activity, setActivity] = useState<ActivityEvent[]>(readActivity);
   const [panelOpen, setPanelOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(
@@ -79,6 +97,22 @@ export default function ProductionApp() {
         api.listProfiles(),
         api.systemDiagnostics(),
       ]);
+
+      const shieldEntries = await Promise.all(
+        nextProfiles.map(async (item) => {
+          try {
+            const shield = await api.networkShieldStatus(item.profile.id);
+            return [item.profile.id, shield] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const nextShields = Object.fromEntries(
+        shieldEntries.filter(
+          (entry): entry is readonly [string, NetworkShieldStatus] => entry !== null,
+        ),
+      );
 
       const before = previous.current;
       if (before) {
@@ -119,7 +153,18 @@ export default function ProductionApp() {
                     ? "success"
                     : "warning",
               title: `${item.profile.name} verification → ${displayState(item.verification.state)}`,
-              detail: `${item.verification.core_pass_count}/${4} core network checks currently pass for the active evidence set.`,
+              detail: `${item.verification.core_pass_count}/4 core network checks currently pass for the active policy evidence set.`,
+            });
+          }
+          if (prior.verification_fresh !== item.verification_fresh) {
+            events.push({
+              id: eventId(),
+              at: Date.now(),
+              level: item.verification_fresh ? "success" : "warning",
+              title: `${item.profile.name} verification ${item.verification_fresh ? "is fresh" : "expired"}`,
+              detail: item.verification_fresh
+                ? "The latest verification evidence is inside this profile's configured freshness window."
+                : "Remote verification should be repeated before this profile is treated as healthy.",
             });
           }
           if (prior.fingerprint.state !== item.fingerprint.state) {
@@ -134,6 +179,18 @@ export default function ProductionApp() {
                     : "info",
               title: `${item.profile.name} fingerprint → ${displayState(item.fingerprint.state)}`,
               detail: `${item.fingerprint.drift_count} drift and ${item.fingerprint.issue_count} review item(s).`,
+            });
+          }
+
+          const priorShield = before.shields[item.profile.id];
+          const nextShield = nextShields[item.profile.id];
+          if (priorShield && nextShield && priorShield.state !== nextShield.state) {
+            events.push({
+              id: eventId(),
+              at: Date.now(),
+              level: shieldTone(nextShield.state),
+              title: `${item.profile.name} Network Shield → ${displayState(nextShield.state)}`,
+              detail: nextShield.message,
             });
           }
         }
@@ -153,10 +210,15 @@ export default function ProductionApp() {
         appendActivity(events);
       }
 
-      previous.current = { profiles: nextProfiles, diagnostics: nextDiagnostics };
+      previous.current = {
+        profiles: nextProfiles,
+        diagnostics: nextDiagnostics,
+        shields: nextShields,
+      };
       setStatus(nextStatus);
       setProfiles(nextProfiles);
       setDiagnostics(nextDiagnostics);
+      setShields(nextShields);
       setSnapshotReady(true);
     } finally {
       setRefreshing(false);
@@ -165,7 +227,7 @@ export default function ProductionApp() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
+    const timer = window.setInterval(() => void refresh(), 6000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -174,13 +236,21 @@ export default function ProductionApp() {
     const diagnosticWarnings = diagnostics.filter((item) => item.status === "warning").length;
     const criticalProfiles = profiles.filter((item) => item.verification.state === "critical").length;
     const driftProfiles = profiles.filter((item) => item.fingerprint.state === "drift").length;
-    const unverifiedProfiles = profiles.filter((item) => item.verification.state !== "healthy").length;
+    const verificationDue = profiles.filter(
+      (item) => item.verification.state !== "healthy" || !item.verification_fresh,
+    ).length;
     const running = profiles.filter((item) => item.runtime.running).length;
+    const shieldValues = Object.values(shields);
+    const shieldTripped = shieldValues.filter((item) => item.state === "tripped").length;
+    const shieldDegraded = shieldValues.filter((item) => item.state === "degraded").length;
+    const shieldHealthy = shieldValues.filter(
+      (item) => item.state === "healthy" || item.state === "monitoring",
+    ).length;
 
     const tone =
-      !status?.chromium_ready || diagnosticErrors > 0 || criticalProfiles > 0
+      !status?.chromium_ready || diagnosticErrors > 0 || criticalProfiles > 0 || shieldTripped > 0
         ? "critical"
-        : diagnosticWarnings > 0 || driftProfiles > 0 || unverifiedProfiles > 0
+        : diagnosticWarnings > 0 || driftProfiles > 0 || verificationDue > 0 || shieldDegraded > 0
           ? "review"
           : "healthy";
 
@@ -190,10 +260,21 @@ export default function ProductionApp() {
       diagnosticWarnings,
       criticalProfiles,
       driftProfiles,
-      unverifiedProfiles,
+      verificationDue,
       running,
+      shieldTripped,
+      shieldDegraded,
+      shieldHealthy,
     };
-  }, [diagnostics, profiles, status]);
+  }, [diagnostics, profiles, shields, status]);
+
+  const shieldRows = useMemo(
+    () =>
+      profiles
+        .filter((item) => item.profile.network.mode === "proxy")
+        .map((item) => ({ item, shield: shields[item.profile.id] ?? null })),
+    [profiles, shields],
+  );
 
   function dismissOnboarding() {
     window.localStorage.setItem(ONBOARDING_KEY, "1");
@@ -206,33 +287,33 @@ export default function ProductionApp() {
   }
 
   return (
-    <div className="m7-shell">
+    <div className="m7-shell m8-shell">
       <CommercialApp />
 
       <button
         className={`m7-assurance-trigger ${summary.tone}`}
         type="button"
         onClick={() => setPanelOpen(true)}
-        aria-label="Open production assurance center"
+        aria-label="Open continuous assurance center"
       >
         <span className="m7-trigger-dot" />
         <span>
           <strong>{summary.tone === "healthy" ? "Healthy" : summary.tone === "critical" ? "Critical" : "Review"}</strong>
-          <small>M7 Assurance</small>
+          <small>M8 Continuous Assurance</small>
         </span>
-        {(summary.criticalProfiles + summary.diagnosticErrors) > 0 && (
-          <em>{summary.criticalProfiles + summary.diagnosticErrors}</em>
+        {(summary.criticalProfiles + summary.diagnosticErrors + summary.shieldTripped) > 0 && (
+          <em>{summary.criticalProfiles + summary.diagnosticErrors + summary.shieldTripped}</em>
         )}
       </button>
 
       {panelOpen && (
         <div className="m7-panel-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setPanelOpen(false)}>
-          <aside className="m7-assurance-panel">
+          <aside className="m7-assurance-panel m8-assurance-panel">
             <header>
               <div>
-                <span>M7 · Production readiness</span>
+                <span>M8 · Network Shield & continuous assurance</span>
                 <h2>Assurance Center</h2>
-                <p>System, profile and verification signals stay separate so failures cannot be hidden by a single score.</p>
+                <p>Runtime route health, verification freshness, fingerprint drift and system readiness stay visible as separate evidence.</p>
               </div>
               <button type="button" onClick={() => setPanelOpen(false)}>×</button>
             </header>
@@ -244,16 +325,47 @@ export default function ProductionApp() {
               <div>
                 <span>Current state</span>
                 <strong>{summary.tone === "healthy" ? "Ready" : summary.tone === "critical" ? "Action required" : "Review recommended"}</strong>
-                <small>{status?.chromium_ready ? "Chromium ready" : "Chromium not ready"} · {profiles.length} profiles · {summary.running} running</small>
+                <small>{status?.chromium_ready ? "Chromium ready" : "Chromium not ready"} · {profiles.length} profiles · {summary.running} running · {summary.shieldHealthy} shield active</small>
               </div>
               <button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "Checking…" : "Refresh"}</button>
             </section>
 
             <section className="m7-kpis">
               <article><span>Critical profiles</span><strong>{summary.criticalProfiles}</strong><small>remote verification</small></article>
+              <article><span>Shield alerts</span><strong>{summary.shieldTripped + summary.shieldDegraded}</strong><small>{summary.shieldTripped} tripped · {summary.shieldDegraded} degraded</small></article>
               <article><span>Fingerprint drift</span><strong>{summary.driftProfiles}</strong><small>needs baseline review</small></article>
-              <article><span>Not verified</span><strong>{summary.unverifiedProfiles}</strong><small>current evidence</small></article>
-              <article><span>System issues</span><strong>{summary.diagnosticErrors + summary.diagnosticWarnings}</strong><small>diagnostics</small></article>
+              <article><span>Verification due</span><strong>{summary.verificationDue}</strong><small>missing, review or expired</small></article>
+            </section>
+
+            <section className="m7-panel-section">
+              <div className="m7-section-title"><div><span>Continuous route health</span><h3>Network Shield</h3></div></div>
+              {shieldRows.length ? (
+                <div className="m8-shield-list">
+                  {shieldRows.map(({ item, shield }) => (
+                    <div className="m8-shield-row" key={item.profile.id}>
+                      <span className={`m8-shield-icon ${shield?.state ?? "standby"}`} />
+                      <div className="m8-shield-main">
+                        <strong>{item.profile.name}</strong>
+                        <small>{shield?.message ?? "Shield state is loading."}</small>
+                        <div className="m8-shield-meta">
+                          <span>{shield?.mode ?? item.profile.privacy.network_guard}</span>
+                          <span>{shield?.endpoint ?? "Proxy endpoint"}</span>
+                          <span>checked {relativeEpoch(shield?.last_checked_at ?? null)}</span>
+                          {shield && shield.consecutive_failures > 0 && (
+                            <span className="warning">failures {shield.consecutive_failures}/{shield.failure_limit}</span>
+                          )}
+                        </div>
+                      </div>
+                      <em className={`m8-shield-badge ${shield?.state ?? "standby"}`}>
+                        {displayState(shield?.state ?? "standby")}
+                      </em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="m7-empty">No proxy profiles require Network Shield monitoring yet.</div>
+              )}
+              <p className="m8-boundary-note">Strict mode terminates a running profile after three consecutive proxy endpoint failures while Dravyn Desktop is alive. It does not replace an OS firewall or prove remote IP/DNS/IPv6/WebRTC behavior.</p>
             </section>
 
             <section className="m7-panel-section">
@@ -276,7 +388,7 @@ export default function ProductionApp() {
               </div>
               {activity.length ? (
                 <div className="m7-activity-list">
-                  {activity.slice(0, 18).map((item) => (
+                  {activity.slice(0, 24).map((item) => (
                     <div className="m7-activity-row" key={item.id}>
                       <span className={`m7-activity-icon ${item.level}`} />
                       <div><strong>{item.title}</strong><small>{item.detail}</small></div>
@@ -285,13 +397,13 @@ export default function ProductionApp() {
                   ))}
                 </div>
               ) : (
-                <div className="m7-empty">State transitions will appear here while Dravyn is running.</div>
+                <div className="m7-empty">Runtime, shield, fingerprint and verification state changes will appear here.</div>
               )}
             </section>
 
             <footer>
-              <strong>Production boundary</strong>
-              <p>This center reports local application state and operator-recorded remote evidence. It does not claim anonymity, OS-level egress enforcement or an internet-facing Dravyn verification service.</p>
+              <strong>Assurance boundary</strong>
+              <p>M8 adds a continuous process-level proxy kill-switch and fresher health semantics. It still does not claim anonymity, OS-level egress firewalling or an internet-facing Dravyn verification service.</p>
             </footer>
           </aside>
         </div>
@@ -299,11 +411,11 @@ export default function ProductionApp() {
 
       {onboardingOpen && snapshotReady && (
         <div className="m7-onboarding-backdrop">
-          <section className="m7-onboarding">
+          <section className="m7-onboarding m8-onboarding">
             <div className="m7-onboarding-brand">D</div>
-            <span className="m7-onboarding-eyebrow">M7 · Production readiness</span>
-            <h2>Set up Dravyn with an assurance-first workflow.</h2>
-            <p className="m7-onboarding-copy">The fastest safe path is to validate Chromium, configure one profile, establish its fingerprint baseline, then verify the remote network view.</p>
+            <span className="m7-onboarding-eyebrow">M8 · Continuous assurance</span>
+            <h2>Set up a profile that stays observable while it runs.</h2>
+            <p className="m7-onboarding-copy">Validate Chromium, configure the route and privacy policy, let Network Shield watch strict proxy health, then establish fingerprint and external verification evidence.</p>
 
             <div className="m7-onboarding-steps">
               <article className={status?.chromium_ready ? "done" : "attention"}>
@@ -312,17 +424,21 @@ export default function ProductionApp() {
               </article>
               <article className={profiles.length > 0 ? "done" : "pending"}>
                 <span>{profiles.length > 0 ? "✓" : "2"}</span>
-                <div><strong>Create a profile</strong><small>Choose browser route and privacy policy together. M7 keeps a last-known-good metadata backup.</small></div>
+                <div><strong>Create a profile</strong><small>Choose browser route and privacy policy together. Profile metadata remains versioned and recoverable.</small></div>
               </article>
-              <article className={profiles.some((item) => item.verification.state === "healthy") ? "done" : "pending"}>
-                <span>{profiles.some((item) => item.verification.state === "healthy") ? "✓" : "3"}</span>
-                <div><strong>Establish evidence</strong><small>Run the local fingerprint audit, then complete Public IP, WebRTC, DNS and IPv6 verification.</small></div>
+              <article className={Object.values(shields).some((item) => item.state === "healthy") ? "done" : "pending"}>
+                <span>{Object.values(shields).some((item) => item.state === "healthy") ? "✓" : "3"}</span>
+                <div><strong>Arm route monitoring</strong><small>Monitor/Strict proxy profiles are watched continuously while the desktop app is running; Strict mode adds the three-failure kill-switch.</small></div>
+              </article>
+              <article className={profiles.some((item) => item.verification.state === "healthy" && item.verification_fresh) ? "done" : "pending"}>
+                <span>{profiles.some((item) => item.verification.state === "healthy" && item.verification_fresh) ? "✓" : "4"}</span>
+                <div><strong>Establish evidence</strong><small>Run the local fingerprint audit, then complete fresh Public IP, WebRTC, DNS and IPv6 verification.</small></div>
               </article>
             </div>
 
             <div className="m7-onboarding-note">
-              <strong>What M7 guarantees</strong>
-              <span>Stronger local metadata recovery, versioned profile/privacy state and clearer health visibility. Remote anonymity and OS-level network enforcement still require infrastructure beyond this desktop milestone.</span>
+              <strong>What M8 adds</strong>
+              <span>Bounded preflight latency, continuous proxy endpoint health monitoring, a strict process kill-switch, verification freshness awareness and an operator-visible shield timeline. Remote leak proof and OS firewalling remain separate future infrastructure.</span>
             </div>
 
             <div className="m7-onboarding-actions">

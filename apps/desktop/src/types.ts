@@ -5,6 +5,14 @@ export type FingerprintState = "not_audited" | "stable" | "review" | "drift";
 export type PrivacyPreset = "standard" | "balanced" | "strict" | "custom";
 export type NetworkGuardMode = "off" | "monitor" | "strict";
 export type WebRtcPolicy = "default" | "proxied_only";
+export type NetworkShieldMode = "off" | "monitor" | "strict";
+export type NetworkShieldState =
+  | "off"
+  | "standby"
+  | "monitoring"
+  | "healthy"
+  | "degraded"
+  | "tripped";
 export type ExternalVerificationTest =
   | "browserleaks_ip"
   | "browserleaks_webrtc"
@@ -151,6 +159,7 @@ export interface ProfileView {
   runtime: RuntimeStatus;
   fingerprint: FingerprintSummary;
   verification: VerificationSummary;
+  verification_fresh: boolean;
 }
 
 export interface ProfileDraft {
@@ -181,6 +190,20 @@ export interface NetworkProbe {
   message: string;
 }
 
+export interface NetworkShieldStatus {
+  profile_id: string;
+  mode: NetworkShieldMode;
+  state: NetworkShieldState;
+  endpoint: string | null;
+  running: boolean;
+  enforced: boolean;
+  policy_version: number;
+  last_checked_at: number | null;
+  consecutive_failures: number;
+  failure_limit: number;
+  message: string;
+}
+
 export interface PrivacyAppliedStatus {
   preferences_path: string;
   preferences_present: boolean;
@@ -199,6 +222,7 @@ export interface PrivacyStatus {
   webrtc_policy: string;
   policy_applied: PrivacyAppliedStatus;
   network_probe: NetworkProbe;
+  network_shield: NetworkShieldStatus;
   verification: VerificationSummary;
   verification_stale: boolean;
   overall_status:

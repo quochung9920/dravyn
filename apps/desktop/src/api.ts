@@ -6,6 +6,7 @@ import type {
   FingerprintHistoryEntry,
   FingerprintSnapshot,
   NetworkProbe,
+  NetworkShieldStatus,
   PrivacyStatus,
   ProfileDraft,
   ProfileView,
@@ -50,6 +51,8 @@ export const api = {
   recordVerification: (id: string, draft: VerificationDraft) =>
     call<VerificationRecord>("record_verification", { id, draft }),
   networkProbe: (id: string) => call<NetworkProbe>("network_probe", { id }),
+  networkShieldStatus: (id: string) =>
+    call<NetworkShieldStatus>("network_shield_status", { id }),
   privacyStatus: (id: string) => call<PrivacyStatus>("privacy_status", { id }),
   openExternalVerification: (id: string, test: ExternalVerificationTest) =>
     call<ProfileView>("open_external_verification", { id, test }),
