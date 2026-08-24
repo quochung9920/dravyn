@@ -93,9 +93,11 @@ impl NetworkShieldSupervisor {
     }
 
     pub fn snapshot(&self, profile_id: &str) -> Option<NetworkShieldSnapshot> {
-        let entries = self.entries.lock().ok()?;
-        let handle = entries.get(profile_id)?;
-        handle.snapshot.lock().ok().map(|value| value.clone())
+        let snapshot = {
+            let entries = self.entries.lock().ok()?;
+            Arc::clone(&entries.get(profile_id)?.snapshot)
+        };
+        snapshot.lock().ok().map(|value| value.clone())
     }
 
     pub fn disarm(&self, profile_id: &str) {
