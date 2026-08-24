@@ -14,6 +14,7 @@ const REVISION_FILE_NAME: &str = "revision.txt";
 const RUNTIME_COMPONENT: &str = "runtime";
 const DEV_PROFILE_COMPONENT: &str = "dev-profile";
 const PROFILES_COMPONENT: &str = "profiles";
+const FINGERPRINTS_COMPONENT: &str = "fingerprints";
 const PROFILE_RUNTIME_COMPONENT: &str = "profile-processes";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,10 +27,6 @@ impl Workspace {
         Self { root }
     }
 
-    /// Resolves the Dravyn workspace from the environment.
-    ///
-    /// `DRAVYN_HOME` wins when set; otherwise the default is
-    /// `$HOME/.cache/dravyn`. Returns an error when neither variable is set.
     pub fn from_env() -> Result<Self, WorkspaceError> {
         let dravyn_home = std::env::var_os(WORKSPACE_ENV);
         let home = std::env::var_os(HOME_ENV);
@@ -78,6 +75,10 @@ impl Workspace {
         self.root.join(PROFILES_COMPONENT)
     }
 
+    pub fn fingerprints_dir(&self) -> PathBuf {
+        self.root.join(FINGERPRINTS_COMPONENT)
+    }
+
     pub fn profile_runtime_dir(&self) -> PathBuf {
         self.runtime_dir().join(PROFILE_RUNTIME_COMPONENT)
     }
@@ -100,7 +101,6 @@ impl core::fmt::Display for WorkspaceError {
 
 impl std::error::Error for WorkspaceError {}
 
-/// Pure resolver so callers can test every branch without touching process env.
 pub fn resolve_workspace_root(
     dravyn_home: Option<OsString>,
     home: Option<OsString>,
@@ -189,6 +189,10 @@ mod tests {
             PathBuf::from("/data/dravyn/runtime/dev-profile")
         );
         assert_eq!(ws.profiles_dir(), PathBuf::from("/data/dravyn/profiles"));
+        assert_eq!(
+            ws.fingerprints_dir(),
+            PathBuf::from("/data/dravyn/fingerprints")
+        );
         assert_eq!(
             ws.profile_runtime_dir(),
             PathBuf::from("/data/dravyn/runtime/profile-processes")
