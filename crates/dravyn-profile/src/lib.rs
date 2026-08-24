@@ -3,18 +3,26 @@ use dravyn_network::NetworkConfig;
 use dravyn_privacy::{PrivacyPolicy, PRIVACY_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub const PROFILE_SCHEMA_VERSION: u32 = 1;
+
 const PROFILE_FILE: &str = "profile.json";
+const PROFILE_BACKUP_FILE: &str = "profile.json.bak";
 const USER_DATA_DIR: &str = "user-data";
 const MAX_NAME_CHARS: usize = 80;
 const MAX_NOTES_CHARS: usize = 4_000;
 const MAX_TAGS: usize = 20;
 const MAX_TAG_CHARS: usize = 40;
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn default_profile_schema_version() -> u32 {
+    PROFILE_SCHEMA_VERSION
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -36,6 +44,8 @@ impl Default for BrowserConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Profile {
+    #[serde(default = "default_profile_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -98,7 +108,9 @@ impl ProfileStore {
             if !path.is_file() {
                 continue;
             }
-            profiles.push(read_profile(&path)?);
+            let profile = read_profile_with_recovery(&path)?;
+            validate_stored_schema(&profile, &path)?;
+            profiles.push(profile);
         }
         profiles.sort_by(|left, right| {
             right
@@ -115,7 +127,8 @@ impl ProfileStore {
         if !path.is_file() {
             return Err(StoreError::NotFound(id.to_owned()));
         }
-        let profile = read_profile(&path)?;
+        let profile = read_profile_with_recovery(&path)?;
+        validate_stored_schema(&profile, &path)?;
         if profile.id != id {
             return Err(StoreError::Corrupt(format!(
                 "profile file {} contains a mismatched id",
@@ -133,6 +146,7 @@ impl ProfileStore {
 
         let now = epoch_seconds();
         let profile = Profile {
+            schema_version: PROFILE_SCHEMA_VERSION,
             id: generate_profile_id(),
             name: draft.name,
             notes: draft.notes,
@@ -160,6 +174,7 @@ impl ProfileStore {
             current.privacy.policy_version.saturating_add(1).max(1)
         };
         let updated = Profile {
+            schema_version: PROFILE_SCHEMA_VERSION,
             id: current.id,
             name: draft.name,
             notes: draft.notes,
@@ -199,19 +214,31 @@ impl ProfileStore {
         Ok(self.profile_dir(id)?.join(USER_DATA_DIR))
     }
 
+    pub fn backup_path(&self, id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self.profile_dir(id)?.join(PROFILE_BACKUP_FILE))
+    }
+
     fn profile_dir_unchecked(&self, id: &str) -> PathBuf {
         self.workspace.profiles_dir().join(id)
     }
 
     fn write_profile(&self, profile: &Profile) -> Result<(), StoreError> {
         validate_profile_id(&profile.id)?;
+        validate_stored_schema(profile, Path::new(PROFILE_FILE))?;
         let dir = self.profile_dir_unchecked(&profile.id);
         fs::create_dir_all(&dir)?;
         let path = dir.join(PROFILE_FILE);
+        let backup = dir.join(PROFILE_BACKUP_FILE);
         let temporary = dir.join(format!("{PROFILE_FILE}.tmp"));
         let data = serde_json::to_vec_pretty(profile)?;
-        fs::write(&temporary, data)?;
+
+        write_and_sync(&temporary, &data)?;
+        if path.is_file() {
+            fs::copy(&path, &backup)?;
+            sync_file_if_present(&backup)?;
+        }
         fs::rename(&temporary, &path)?;
+        sync_directory(&dir)?;
         Ok(())
     }
 }
@@ -231,6 +258,74 @@ fn privacy_semantics_equal(left: &PrivacyPolicy, right: &PrivacyPolicy) -> bool 
 fn read_profile(path: &Path) -> Result<Profile, StoreError> {
     let bytes = fs::read(path)?;
     serde_json::from_slice(&bytes).map_err(StoreError::Json)
+}
+
+fn read_profile_with_recovery(path: &Path) -> Result<Profile, StoreError> {
+    match read_profile(path) {
+        Ok(profile) => Ok(profile),
+        Err(primary_error @ StoreError::Json(_)) => {
+            let backup = path.with_file_name(PROFILE_BACKUP_FILE);
+            if !backup.is_file() {
+                return Err(primary_error);
+            }
+            let recovered = match read_profile(&backup) {
+                Ok(profile) => profile,
+                Err(_) => return Err(primary_error),
+            };
+            validate_stored_schema(&recovered, &backup)?;
+            let data = serde_json::to_vec_pretty(&recovered)?;
+            let temporary = path.with_file_name(format!("{PROFILE_FILE}.recovery.tmp"));
+            write_and_sync(&temporary, &data)?;
+            fs::rename(&temporary, path)?;
+            if let Some(parent) = path.parent() {
+                sync_directory(parent)?;
+            }
+            Ok(recovered)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_stored_schema(profile: &Profile, path: &Path) -> Result<(), StoreError> {
+    if profile.schema_version != PROFILE_SCHEMA_VERSION {
+        return Err(StoreError::Corrupt(format!(
+            "profile file {} uses unsupported schema version {}; expected {}",
+            path.display(),
+            profile.schema_version,
+            PROFILE_SCHEMA_VERSION
+        )));
+    }
+    Ok(())
+}
+
+fn write_and_sync(path: &Path, data: &[u8]) -> Result<(), StoreError> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(data)?;
+    file.flush()?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn sync_file_if_present(path: &Path) -> Result<(), StoreError> {
+    if path.is_file() {
+        File::open(path)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<(), StoreError> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), StoreError> {
+    Ok(())
 }
 
 fn normalize_and_validate_draft(mut draft: ProfileDraft) -> Result<ProfileDraft, StoreError> {
@@ -253,10 +348,7 @@ fn normalize_and_validate_draft(mut draft: ProfileDraft) -> Result<ProfileDraft,
         )));
     }
 
-    validate_window_size(
-        draft.browser.window_width,
-        draft.browser.window_height,
-    )?;
+    validate_window_size(draft.browser.window_width, draft.browser.window_height)?;
     draft
         .network
         .validate()
@@ -418,6 +510,7 @@ mod tests {
     fn create_get_update_and_delete_profile() {
         let store = temp_store("crud");
         let created = store.create(draft("Primary")).unwrap();
+        assert_eq!(created.schema_version, PROFILE_SCHEMA_VERSION);
         assert!(store.user_data_dir(&created.id).unwrap().is_dir());
         assert_eq!(store.get(&created.id).unwrap().name, "Primary");
         assert_eq!(store.get(&created.id).unwrap().privacy, PrivacyPolicy::default());
@@ -428,12 +521,30 @@ mod tests {
         assert_eq!(updated.name, "Updated");
         assert_eq!(updated.notes, "note");
         assert_eq!(updated.privacy.policy_version, 1);
+        assert!(store.backup_path(&created.id).unwrap().is_file());
 
         store.delete(&created.id).unwrap();
         assert!(matches!(
             store.get(&created.id),
             Err(StoreError::NotFound(_))
         ));
+        let _ = fs::remove_dir_all(store.workspace().root());
+    }
+
+    #[test]
+    fn corrupt_primary_recovers_last_known_good_backup() {
+        let store = temp_store("recovery");
+        let created = store.create(draft("Primary")).unwrap();
+        let updated = store.update(&created.id, draft("Updated")).unwrap();
+        assert_eq!(updated.name, "Updated");
+
+        let profile_path = store.profile_dir(&created.id).unwrap().join(PROFILE_FILE);
+        fs::write(&profile_path, b"{ definitely broken json").unwrap();
+
+        let recovered = store.get(&created.id).unwrap();
+        assert_eq!(recovered.name, "Primary");
+        let restored: Profile = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
+        assert_eq!(restored.name, "Primary");
         let _ = fs::remove_dir_all(store.workspace().root());
     }
 
