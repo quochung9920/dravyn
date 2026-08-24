@@ -15,6 +15,7 @@ const RUNTIME_COMPONENT: &str = "runtime";
 const DEV_PROFILE_COMPONENT: &str = "dev-profile";
 const PROFILES_COMPONENT: &str = "profiles";
 const FINGERPRINTS_COMPONENT: &str = "fingerprints";
+const VERIFICATIONS_COMPONENT: &str = "verifications";
 const PROFILE_RUNTIME_COMPONENT: &str = "profile-processes";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,10 @@ impl Workspace {
 
     pub fn fingerprints_dir(&self) -> PathBuf {
         self.root.join(FINGERPRINTS_COMPONENT)
+    }
+
+    pub fn verifications_dir(&self) -> PathBuf {
+        self.root.join(VERIFICATIONS_COMPONENT)
     }
 
     pub fn profile_runtime_dir(&self) -> PathBuf {
@@ -192,6 +197,10 @@ mod tests {
         assert_eq!(
             ws.fingerprints_dir(),
             PathBuf::from("/data/dravyn/fingerprints")
+        );
+        assert_eq!(
+            ws.verifications_dir(),
+            PathBuf::from("/data/dravyn/verifications")
         );
         assert_eq!(
             ws.profile_runtime_dir(),
