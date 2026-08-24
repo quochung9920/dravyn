@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   DiagnosticItem,
+  FingerprintHistoryEntry,
+  FingerprintSnapshot,
   NetworkProbe,
   ProfileDraft,
   ProfileView,
@@ -30,6 +32,12 @@ export const api = {
   stopProfile: (id: string) => call<ProfileView>("stop_profile", { id }),
   resetProfile: (id: string) => call<ProfileView>("reset_profile", { id }),
   deleteProfile: (id: string) => call<void>("delete_profile", { id }),
+  fingerprintHistory: (id: string) =>
+    call<FingerprintHistoryEntry[]>("fingerprint_history", { id }),
+  fingerprintLatest: (id: string) =>
+    call<FingerprintSnapshot | null>("fingerprint_latest", { id }),
+  setFingerprintBaseline: (id: string) =>
+    call<ProfileView>("set_fingerprint_baseline", { id }),
   networkProbe: (id: string) => call<NetworkProbe>("network_probe", { id }),
   systemDiagnostics: () => call<DiagnosticItem[]>("system_diagnostics"),
   openPrivacyAudit: (id: string) => call<ProfileView>("open_privacy_audit", { id }),
