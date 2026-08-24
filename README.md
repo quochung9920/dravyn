@@ -4,22 +4,23 @@ Dravyn is a local-first browser-core research and development project focused on
 
 ## Current milestone
 
-**M4 - Per-Profile Fingerprint Engine** (M0/M1/M2/M3 complete)
+**M5 - Per-Profile Privacy Policy & Leak Guard** (M0/M1/M2/M3/M4 complete)
 
-M1 established the reproducible Chromium checkout/build/run path. M2 introduced persistent browser profiles and the first Tauri desktop app. M3 added the professional operations console, network checks and local privacy inspection. M4 makes fingerprint state a first-class property of every individual profile:
+M4 made fingerprint baseline, history and drift first-class properties of every profile. M5 adds a separate privacy enforcement layer so a profile has both an observed fingerprint history and an explicit browser/network privacy policy:
 
-- one fingerprint baseline per profile
-- local snapshot history per profile, capped to the latest 50 captures
-- current consistency score, surface count, review items and drift count on profile cards
-- stable-surface drift detection against the selected profile's own baseline
-- dedicated Fingerprint Center with timeline, latest comparison and baseline controls
-- automatic baseline creation on the first successful audit
-- explicit **Set latest as baseline** workflow for intentional environment changes
-- a loopback-only fingerprint capture service bound to `127.0.0.1` with an ephemeral desktop-session token
-- local audit coverage for User-Agent/platform, Client Hints, language/timezone, screen/DPR, Canvas, WebGL, AudioContext, WebRTC, hardware hints, storage and permissions
-- fingerprint data removal when the owning profile is deleted
+- per-profile Standard, Balanced, Strict and Custom privacy policies
+- privacy policy persisted beside each profile's browser and network configuration
+- Chromium privacy preferences written and verified before a stopped profile launches
+- WebRTC `disable_non_proxied_udp` mode available per profile
+- per-profile third-party-cookie and permission defaults for notifications, geolocation, camera and microphone
+- Off, Monitor and Strict Network Guard modes
+- Strict proxy profiles fail closed before launch when the configured proxy endpoint cannot pass TCP preflight
+- centralized network preflight results shared by runtime and desktop UI
+- dedicated Privacy Center with applied-policy state, network preflight and external verification launchers
+- BrowserLeaks IP/WebRTC/DNS/Canvas/WebGL, EFF Cover Your Tracks and AmIUnique launch inside the exact selected profile
+- external verification is deliberately kept separate from local preflight: endpoint reachability is not presented as proof of anonymity or zero leakage
 
-Dravyn's scope is privacy engineering, local profile isolation, network control, compatibility testing, and authorized automation. The fingerprint engine observes, stores and compares browser-visible surfaces for the owning profile; it does not randomize or spoof identity signals. Dravyn is not intended to bypass identity verification, CAPTCHA systems, KYC, anti-fraud controls, or third-party abuse protections.
+Dravyn's scope is privacy engineering, local profile isolation, network control, compatibility testing, and authorized automation. The fingerprint engine observes/stores browser-visible surfaces and the privacy engine applies defensive browser policy. Dravyn does not randomize or spoof identity signals, impersonate devices, or provide CAPTCHA/KYC/anti-fraud evasion.
 
 ## Quick start
 
@@ -66,41 +67,39 @@ pnpm install
 pnpm tauri dev
 ```
 
-The desktop app reuses `$DRAVYN_HOME/chromium/src/out/Dravyn/chrome`; UI, profile-manager and fingerprint-engine changes do not require rebuilding Chromium.
+The desktop app reuses `$DRAVYN_HOME/chromium/src/out/Dravyn/chrome`; M5 application-layer changes do not require rebuilding Chromium.
 
-### Profile CLI
+## M5 privacy workflow
 
-```bash
-dravyn profile list
-dravyn profile create "QA profile" --start-url https://example.com
-dravyn profile launch <id>
-dravyn profile stop <id>
-```
+Open **Profiles** and edit a profile's Privacy Policy. A stopped profile applies and verifies that policy before Chromium is spawned. With **Strict Network Guard** plus an explicit proxy, an unreachable proxy blocks launch instead of silently falling back to browsing.
 
-## M4 per-profile fingerprints
+Then open **Privacy**:
 
-Open **Fingerprints** in Dravyn Desktop, select a profile and choose **Run profile audit**. Dravyn opens a local inspector inside that exact Chromium `--user-data-dir`. The inspector posts its observations only to the desktop's loopback capture service, which stores them under that profile's fingerprint directory.
+1. choose the profile;
+2. run local preflight to inspect stored Chromium policy and proxy endpoint reachability;
+3. launch the profile with policy enforcement if it is stopped;
+4. use **External Verification Lab** to open IP, WebRTC, DNS/IPv6 and fingerprint tests inside that exact profile;
+5. treat unexpected real-network exposure reported by those remote tests as a critical privacy issue.
 
-The first successful capture becomes the profile baseline. Later captures compare stable surfaces with that baseline and report drift. Dynamic observations such as permission state, color scheme and WebRTC candidate type can still be recorded without being treated as baseline identity.
+Local checks intentionally do not claim that a proxy is anonymous or that no leak exists. Public IP, DNS, IPv6 and WebRTC exposure must be confirmed from a remote website's point of view.
 
-Default storage:
+See [`docs/m5-privacy-leak-guard.md`](docs/m5-privacy-leak-guard.md) for the M5 threat model and enforcement lifecycle. Fingerprint baseline/history details remain in [`docs/m4-per-profile-fingerprints.md`](docs/m4-per-profile-fingerprints.md).
+
+## Per-profile data model
 
 ```text
 ~/.cache/dravyn/
 ├── profiles/
 │   └── <profile-id>/
-│       ├── profile.json
-│       └── user-data/
+│       ├── profile.json        # browser + network + privacy policy
+│       └── user-data/          # Chromium profile and applied Preferences
 ├── fingerprints/
 │   └── <profile-id>/
 │       ├── baseline.json
 │       ├── latest.json
 │       └── history/
-│           └── <snapshot-id>.json
 └── runtime/
 ```
-
-See [`docs/m4-per-profile-fingerprints.md`](docs/m4-per-profile-fingerprints.md) for the M4 architecture, storage model and safety boundary.
 
 ## Repository layout
 
@@ -110,11 +109,12 @@ apps/
 
 crates/
   dravyn-cli/           Command-line interface
-  dravyn-core/          Diagnostics, Chromium state detection, runtime orchestration
+  dravyn-core/          Chromium detection and fail-closed runtime orchestration
   dravyn-common/        Shared types and DRAVYN_HOME workspace resolution
   dravyn-profile/       Persistent profile domain + storage
-  dravyn-network/       Explicit direct/proxy network configuration
+  dravyn-network/       Direct/proxy configuration + endpoint preflight
   dravyn-fingerprint/   Per-profile baseline, history and drift engine
+  dravyn-privacy/       Per-profile defensive privacy policy + Chromium preference enforcement
 
 browser/                Chromium configuration of record + future reviewed privacy patch sets
 scripts/                Development helpers
@@ -127,22 +127,6 @@ Large or machine-generated data never belongs in the repository. The root `.giti
 
 Source-of-truth files such as `Cargo.toml`, `package.json`, Tauri configuration, Chromium configuration and application source/assets remain tracked.
 
-## Chromium workspace
-
-Large Chromium sources/build outputs live outside the repository by default at `~/.cache/dravyn`:
-
-```text
-~/.cache/dravyn/
-├── depot_tools/
-├── chromium/
-│   └── src/out/Dravyn/chrome
-├── profiles/
-├── fingerprints/
-└── runtime/
-```
-
-Override this with `DRAVYN_HOME` when needed.
-
 ## Status
 
-Early development (`0.1.0-dev`). APIs, profile schema, fingerprint schema and desktop UI may change without notice.
+Early development (`0.1.0-dev`). APIs, profile/fingerprint/privacy schemas and desktop UI may change without notice.
