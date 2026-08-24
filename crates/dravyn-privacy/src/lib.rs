@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +69,19 @@ impl Default for PrivacyPolicy {
 }
 
 impl PrivacyPolicy {
+    pub fn standard() -> Self {
+        Self {
+            preset: PrivacyPreset::Standard,
+            network_guard: NetworkGuardMode::Off,
+            webrtc: WebRtcPolicy::Default,
+            block_third_party_cookies: false,
+            block_notifications: false,
+            block_geolocation: false,
+            block_camera: false,
+            block_microphone: false,
+        }
+    }
+
     pub fn strict() -> Self {
         Self {
             preset: PrivacyPreset::Strict,
@@ -208,23 +221,20 @@ pub fn inspect_user_data(
     ];
     let blocked_permission_count = blocked_permissions
         .iter()
-        .filter(|(name, expected_blocked)| {
-            if !*expected_blocked {
-                return false;
-            }
-            get_path(
-                &root,
-                &["profile", "default_content_setting_values", name],
-            )
-            .and_then(Value::as_i64)
-                == Some(2)
+        .filter(|entry| {
+            let name = entry.0;
+            let expected_blocked = entry.1;
+            expected_blocked
+                && get_path(
+                    &root,
+                    &["profile", "default_content_setting_values", name],
+                )
+                .and_then(Value::as_i64)
+                    == Some(2)
         })
         .count();
 
-    let expected_blocked_count = blocked_permissions
-        .iter()
-        .filter(|(_, blocked)| *blocked)
-        .count();
+    let expected_blocked_count = blocked_permissions.iter().filter(|entry| entry.1).count();
     let webrtc_matches = actual_webrtc_policy.as_deref() == Some(policy.webrtc.chromium_value());
     let cookies_match = third_party_cookies_blocked == policy.block_third_party_cookies;
     let permissions_match = blocked_permission_count == expected_blocked_count;
@@ -320,6 +330,7 @@ impl From<serde_json::Error> for PrivacyError {
 mod tests {
     use super::*;
     use std::env;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -335,7 +346,10 @@ mod tests {
         let root = temp_dir("strict");
         let status = apply_to_user_data(&root, &PrivacyPolicy::strict()).unwrap();
         assert!(status.applied);
-        assert_eq!(status.actual_webrtc_policy.as_deref(), Some("disable_non_proxied_udp"));
+        assert_eq!(
+            status.actual_webrtc_policy.as_deref(),
+            Some("disable_non_proxied_udp")
+        );
         assert!(status.third_party_cookies_blocked);
         assert_eq!(status.blocked_permission_count, 4);
         let _ = fs::remove_dir_all(root);
