@@ -191,13 +191,14 @@ fn view(
 }
 
 fn shield_view(snapshot: NetworkShieldSnapshot) -> NetworkShieldView {
+    let enforced = snapshot.enforced();
     NetworkShieldView {
         profile_id: snapshot.profile_id,
         mode: snapshot.mode.label().to_owned(),
         state: snapshot.state.label().to_owned(),
         endpoint: snapshot.endpoint,
         running: snapshot.running,
-        enforced: snapshot.enforced(),
+        enforced,
         policy_version: snapshot.policy_version,
         last_checked_at: snapshot.last_checked_at,
         consecutive_failures: snapshot.consecutive_failures,
@@ -227,20 +228,28 @@ fn ensure_network_shield(
     profiles: &ProfileStore,
     profile: &Profile,
     shield: &NetworkShieldSupervisor,
-) -> Result<NetworkShieldSnapshot, String> {
+) -> Result<(), String> {
     let runtime = profile_runtime::status(workspace, profiles, profile)
         .map_err(|error| error.to_string())?;
     match shield.reconcile(workspace, profile, runtime.running) {
-        Ok(snapshot) => Ok(snapshot),
+        Ok(_) => Ok(()),
         Err(error) if strict_proxy_profile(profile) && runtime.running => {
-            let _ = profile_runtime::stop(workspace, profiles, profile);
+            let stop_result = profile_runtime::stop(workspace, profiles, profile);
+            if let Err(stop_error) = stop_result {
+                return Err(format!(
+                    "Strict Network Shield could not arm ({error}) and Dravyn could not confirm profile termination: {stop_error}"
+                ));
+            }
             Err(format!(
                 "Strict Network Shield could not arm after launch, so Dravyn stopped the profile: {error}"
             ))
         }
         Err(error) => {
-            eprintln!("[dravyn] Network Shield monitor unavailable for {}: {error}", profile.id);
-            Err(error)
+            eprintln!(
+                "[dravyn] Network Shield monitor unavailable for {}: {error}",
+                profile.id
+            );
+            Ok(())
         }
     }
 }
@@ -269,7 +278,10 @@ fn list_profiles(
     for profile in profiles.list().map_err(|error| error.to_string())? {
         let row = view(&workspace, &profiles, &fingerprints, profile.clone())?;
         if let Err(error) = shield.reconcile(&workspace, &profile, row.runtime.running) {
-            eprintln!("[dravyn] failed to reconcile Network Shield for {}: {error}", profile.id);
+            eprintln!(
+                "[dravyn] failed to reconcile Network Shield for {}: {error}",
+                profile.id
+            );
         }
         rows.push(row);
     }
@@ -308,7 +320,9 @@ fn update_profile(
         .map_err(|error| error.to_string())?;
     if runtime.running {
         if let Err(error) = shield.reconcile(&workspace, &profile, true) {
-            eprintln!("[dravyn] failed to reconcile Network Shield after metadata update: {error}");
+            eprintln!(
+                "[dravyn] failed to reconcile Network Shield after metadata update: {error}"
+            );
         }
     } else {
         shield.disarm(&id);
