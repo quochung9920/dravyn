@@ -49,6 +49,7 @@ export interface BrowserConfig {
 }
 
 export interface Profile {
+  schema_version?: number;
   id: string;
   name: string;
   notes: string;
@@ -115,7 +116,6 @@ export interface FingerprintHistoryEntry {
 
 export interface VerificationSummary {
   profile_id: string;
-  policy_version: number | null;
   record_count: number;
   latest_test_count: number;
   core_test_count: number;

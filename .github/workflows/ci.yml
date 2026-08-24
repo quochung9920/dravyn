@@ -8,6 +8,7 @@ on:
 jobs:
   rust:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,10 +28,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
+        env:
+          RUST_BACKTRACE: "1"
         run: cargo test --workspace
 
   desktop:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,7 +71,11 @@ jobs:
         working-directory: apps/desktop
         run: pnpm install --no-frozen-lockfile
 
-      - name: TypeScript and Vite build
+      - name: TypeScript check
+        working-directory: apps/desktop
+        run: pnpm check
+
+      - name: Vite production build
         working-directory: apps/desktop
         run: pnpm build
 
@@ -76,6 +84,7 @@ jobs:
 
   shell:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4

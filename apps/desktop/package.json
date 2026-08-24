@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck",
     "build": "tsc && vite build",
     "tauri": "tauri"
   },
