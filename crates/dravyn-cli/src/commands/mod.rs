@@ -1,5 +1,7 @@
 pub mod chromium;
+pub mod desktop;
 pub mod doctor;
+pub mod profile;
 
 pub const SCRIPT_NOT_FOUND_HINT: &str = "Run this command from the Dravyn repository checkout, or set DRAVYN_REPO_ROOT to the repository path.";
 
