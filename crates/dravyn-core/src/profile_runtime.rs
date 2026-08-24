@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TERMINATION_WAIT: Duration = Duration::from_millis(50);
 const TERMINATION_ATTEMPTS: usize = 40;
+const KILL_CONFIRM_ATTEMPTS: usize = 20;
 const NETWORK_PREFLIGHT_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,9 +85,9 @@ pub fn launch(
         .validate()
         .map_err(|error| RuntimeError::PrivacyPolicy(error.to_string()))?;
 
-    if profile.privacy.network_guard == NetworkGuardMode::Strict
-        && profile.network.mode == NetworkMode::Proxy
-    {
+    let strict_proxy = profile.privacy.network_guard == NetworkGuardMode::Strict
+        && profile.network.mode == NetworkMode::Proxy;
+    if strict_proxy {
         let probe = probe_network(&profile.network, NETWORK_PREFLIGHT_TIMEOUT);
         if probe.reachable != Some(true) {
             return Err(RuntimeError::NetworkGuard(format!(
@@ -127,6 +128,15 @@ pub fn launch(
         .map_err(|error| RuntimeError::Profile(error.to_string()))?
     {
         command.arg(proxy_arg);
+    }
+
+    // QUIC is UDP-based and is not required for Dravyn's strict manual-proxy
+    // profile mode. Disabling it narrows the runtime's network transport surface
+    // while the continuous Network Shield watches the configured proxy endpoint.
+    // This is defensive routing hardening, not proof that remote IP/DNS exposure
+    // matches policy; external verification remains a separate evidence layer.
+    if strict_proxy {
+        command.arg("--disable-quic");
     }
 
     for argument in profile.privacy.chromium_arguments() {
@@ -178,8 +188,15 @@ pub fn stop(
     }
 
     send_signal(pid, "-KILL")?;
-    let _ = fs::remove_file(pid_file(workspace, &profile.id));
-    Ok(RuntimeStatus::stopped())
+    for _ in 0..KILL_CONFIRM_ATTEMPTS {
+        if !process_exists(pid) {
+            let _ = fs::remove_file(pid_file(workspace, &profile.id));
+            return Ok(RuntimeStatus::stopped());
+        }
+        thread::sleep(TERMINATION_WAIT);
+    }
+
+    Err(RuntimeError::TerminationTimeout(pid))
 }
 
 fn send_signal(pid: u32, signal: &str) -> Result<(), RuntimeError> {
@@ -268,7 +285,9 @@ fn write_pid_record(path: &Path, record: PidRecord) -> Result<(), RuntimeError> 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, format!("{}\n{}\n", record.pid, record.started_at))?;
+    let temporary = path.with_extension("pid.tmp");
+    fs::write(&temporary, format!("{}\n{}\n", record.pid, record.started_at))?;
+    fs::rename(&temporary, path)?;
     Ok(())
 }
 
@@ -289,6 +308,7 @@ pub enum RuntimeError {
     NetworkGuard(String),
     InvalidPidFile(PathBuf),
     SignalFailed { pid: u32, signal: String },
+    TerminationTimeout(u32),
     UnsupportedPlatform,
 }
 
@@ -315,6 +335,9 @@ impl fmt::Display for RuntimeError {
             }
             RuntimeError::SignalFailed { pid, signal } => {
                 write!(f, "failed to send {signal} to browser process {pid}")
+            }
+            RuntimeError::TerminationTimeout(pid) => {
+                write!(f, "browser process {pid} did not exit after TERM/KILL timeout")
             }
             RuntimeError::UnsupportedPlatform => {
                 write!(f, "profile process control is currently supported on Linux/WSLg")
