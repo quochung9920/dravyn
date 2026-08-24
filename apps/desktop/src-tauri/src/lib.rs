@@ -4,19 +4,21 @@ use dravyn_fingerprint::{
     AuditSubmission, FingerprintHistoryEntry, FingerprintSnapshot, FingerprintStore,
     FingerprintSummary,
 };
-use dravyn_network::NetworkMode;
+use dravyn_network::{NetworkMode, NetworkProbeResult, probe_network};
+use dravyn_privacy::{NetworkGuardMode, PrivacyAppliedStatus, inspect_user_data};
 use dravyn_profile::{Profile, ProfileDraft, ProfileStore};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PRIVACY_AUDIT_HTML: &str = include_str!("../privacy_audit.html");
 const MAX_HTTP_REQUEST_BYTES: usize = 256 * 1024;
+const NETWORK_PROBE_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, Serialize)]
 struct RuntimeView {
@@ -43,21 +45,24 @@ struct AppStatus {
 }
 
 #[derive(Debug, Serialize)]
-struct NetworkProbe {
-    mode: String,
-    endpoint: Option<String>,
-    valid: bool,
-    reachable: Option<bool>,
-    latency_ms: Option<u64>,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
 struct DiagnosticItem {
     id: String,
     label: String,
     status: String,
     detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivacyStatusView {
+    profile_id: String,
+    preset: String,
+    network_guard: String,
+    webrtc_policy: String,
+    policy_applied: PrivacyAppliedStatus,
+    network_probe: NetworkProbeResult,
+    overall_status: String,
+    external_verification_required: bool,
+    message: String,
 }
 
 #[derive(Debug)]
@@ -141,6 +146,10 @@ fn view(
         },
         fingerprint,
     })
+}
+
+fn enum_label<T: std::fmt::Debug>(value: T) -> String {
+    format!("{value:?}").to_lowercase()
 }
 
 #[tauri::command]
@@ -259,75 +268,108 @@ fn set_fingerprint_baseline(id: String) -> Result<ProfileView, String> {
 }
 
 #[tauri::command]
-fn network_probe(id: String) -> Result<NetworkProbe, String> {
+fn network_probe(id: String) -> Result<NetworkProbeResult, String> {
     let (_, profiles, _) = context()?;
     let profile = profiles.get(&id).map_err(|error| error.to_string())?;
+    Ok(probe_network(&profile.network, NETWORK_PROBE_TIMEOUT))
+}
 
-    if let Err(error) = profile.network.validate() {
-        return Ok(NetworkProbe {
-            mode: "invalid".to_owned(),
-            endpoint: None,
-            valid: false,
-            reachable: None,
-            latency_ms: None,
-            message: error.to_string(),
-        });
+#[tauri::command]
+fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
+    let (_, profiles, _) = context()?;
+    let profile = profiles.get(&id).map_err(|error| error.to_string())?;
+    let user_data = profiles
+        .user_data_dir(&profile.id)
+        .map_err(|error| error.to_string())?;
+    let policy_applied = inspect_user_data(&user_data, &profile.privacy)
+        .map_err(|error| error.to_string())?;
+    let network_probe = probe_network(&profile.network, NETWORK_PROBE_TIMEOUT);
+
+    let strict_proxy_failure = profile.privacy.network_guard == NetworkGuardMode::Strict
+        && profile.network.mode == NetworkMode::Proxy
+        && network_probe.reachable != Some(true);
+    let (overall_status, message) = if strict_proxy_failure {
+        (
+            "critical".to_owned(),
+            "Strict Network Guard would block launch because the configured proxy endpoint did not pass preflight.".to_owned(),
+        )
+    } else if !policy_applied.applied {
+        (
+            "restart_required".to_owned(),
+            "Stored Chromium preferences do not yet match this profile's privacy policy. Stop and relaunch the profile to apply the policy before browsing.".to_owned(),
+        )
+    } else {
+        (
+            "verify_external".to_owned(),
+            "Local privacy policy is applied. Use External Verification in this exact profile to confirm public IP, WebRTC, DNS and IPv6 exposure as seen by real websites.".to_owned(),
+        )
+    };
+
+    Ok(PrivacyStatusView {
+        profile_id: profile.id,
+        preset: enum_label(profile.privacy.preset),
+        network_guard: enum_label(profile.privacy.network_guard),
+        webrtc_policy: enum_label(profile.privacy.webrtc),
+        policy_applied,
+        network_probe,
+        overall_status,
+        external_verification_required: true,
+        message,
+    })
+}
+
+#[tauri::command]
+fn open_external_verification(id: String, test: String) -> Result<ProfileView, String> {
+    let (workspace, profiles, fingerprints) = context()?;
+    let profile = profiles.get(&id).map_err(|error| error.to_string())?;
+    let url = external_test_url(&test)
+        .ok_or_else(|| format!("unsupported external verification test: {test}"))?;
+    open_url_in_profile(&workspace, &profiles, &profile, url)?;
+    view(&workspace, &profiles, &fingerprints, profile)
+}
+
+fn external_test_url(test: &str) -> Option<&'static str> {
+    match test {
+        "browserleaks_ip" => Some("https://browserleaks.com/ip"),
+        "browserleaks_webrtc" => Some("https://browserleaks.com/webrtc"),
+        "browserleaks_dns" => Some("https://browserleaks.com/dns"),
+        "browserleaks_canvas" => Some("https://browserleaks.com/canvas"),
+        "browserleaks_webgl" => Some("https://browserleaks.com/webgl"),
+        "eff" => Some("https://coveryourtracks.eff.org/"),
+        "amiunique" => Some("https://amiunique.org/fingerprint"),
+        _ => None,
     }
+}
 
-    match profile.network.mode {
-        NetworkMode::Direct => Ok(NetworkProbe {
-            mode: "direct".to_owned(),
-            endpoint: None,
-            valid: true,
-            reachable: None,
-            latency_ms: None,
-            message: "Direct connection is configured. No proxy endpoint is used.".to_owned(),
-        }),
-        NetworkMode::Proxy => {
-            let proxy = profile
-                .network
-                .proxy
-                .as_ref()
-                .ok_or_else(|| "proxy settings are missing".to_owned())?;
-            let endpoint = format!("{}://{}:{}", proxy.scheme.as_str(), proxy.host, proxy.port);
-            let addresses = (proxy.host.as_str(), proxy.port)
-                .to_socket_addrs()
-                .map_err(|error| format!("failed to resolve proxy host: {error}"))?
-                .take(8)
-                .collect::<Vec<_>>();
-
-            if addresses.is_empty() {
-                return Ok(NetworkProbe {
-                    mode: "proxy".to_owned(),
-                    endpoint: Some(endpoint),
-                    valid: true,
-                    reachable: Some(false),
-                    latency_ms: None,
-                    message: "Proxy host resolved to no usable address.".to_owned(),
-                });
-            }
-
-            let started = Instant::now();
-            let timeout = Duration::from_millis(1_500);
-            let reachable = addresses
-                .iter()
-                .any(|address| TcpStream::connect_timeout(address, timeout).is_ok());
-            let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-
-            Ok(NetworkProbe {
-                mode: "proxy".to_owned(),
-                endpoint: Some(endpoint),
-                valid: true,
-                reachable: Some(reachable),
-                latency_ms: Some(elapsed),
-                message: if reachable {
-                    "Proxy endpoint accepted a TCP connection. This checks reachability only; it does not validate credentials or anonymity.".to_owned()
-                } else {
-                    "Proxy endpoint could not be reached within the local timeout.".to_owned()
-                },
-            })
-        }
+fn open_url_in_profile(
+    workspace: &Workspace,
+    profiles: &ProfileStore,
+    profile: &Profile,
+    url: &str,
+) -> Result<(), String> {
+    let runtime = profile_runtime::status(workspace, profiles, profile)
+        .map_err(|error| error.to_string())?;
+    if runtime.running {
+        let user_data = profiles
+            .user_data_dir(&profile.id)
+            .map_err(|error| error.to_string())?;
+        Command::new(workspace.chrome_binary())
+            .arg(format!("--user-data-dir={}", user_data.display()))
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("failed to open URL in profile: {error}"))?;
+    } else {
+        let mut launch_profile = profile.clone();
+        launch_profile.browser.start_url = Some(url.to_owned());
+        profile_runtime::launch(workspace, profiles, &launch_profile)
+            .map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -388,6 +430,13 @@ fn system_diagnostics(server: tauri::State<'_, AuditServer>) -> Result<Vec<Diagn
     });
 
     items.push(DiagnosticItem {
+        id: "privacy-preflight".to_owned(),
+        label: "Privacy preflight".to_owned(),
+        status: "ok".to_owned(),
+        detail: "Privacy preferences are applied and verified before profile launch; strict proxy profiles fail closed when endpoint preflight fails.".to_owned(),
+    });
+
+    items.push(DiagnosticItem {
         id: "fingerprint-capture".to_owned(),
         label: "Local fingerprint capture".to_owned(),
         status: "ok".to_owned(),
@@ -408,30 +457,7 @@ fn open_privacy_audit(
     let (workspace, profiles, fingerprints) = context()?;
     let profile = profiles.get(&id).map_err(|error| error.to_string())?;
     let audit_url = server.audit_url(&profile.id);
-    let runtime = profile_runtime::status(&workspace, &profiles, &profile)
-        .map_err(|error| error.to_string())?;
-
-    if runtime.running {
-        let user_data = profiles
-            .user_data_dir(&profile.id)
-            .map_err(|error| error.to_string())?;
-        Command::new(workspace.chrome_binary())
-            .arg(format!("--user-data-dir={}", user_data.display()))
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg(audit_url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("failed to open fingerprint audit: {error}"))?;
-    } else {
-        let mut audit_profile = profile.clone();
-        audit_profile.browser.start_url = Some(audit_url);
-        profile_runtime::launch(&workspace, &profiles, &audit_profile)
-            .map_err(|error| error.to_string())?;
-    }
-
+    open_url_in_profile(&workspace, &profiles, &profile, &audit_url)?;
     view(&workspace, &profiles, &fingerprints, profile)
 }
 
@@ -450,7 +476,12 @@ fn handle_audit_connection(
     let (path, query) = split_target(&request.target);
     let token = query.get("token").map(String::as_str).unwrap_or_default();
     if token != expected_token {
-        return write_http_response(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", b"Forbidden");
+        return write_http_response(
+            &mut stream,
+            "403 Forbidden",
+            "text/plain; charset=utf-8",
+            b"Forbidden",
+        );
     }
 
     let profiles = ProfileStore::new(workspace.clone());
@@ -583,7 +614,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn split_target(target: &str) -> (&str, HashMap<String, String>) {
@@ -639,7 +672,8 @@ fn capture_token() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let workspace = Workspace::from_env().expect("Dravyn workspace must resolve before desktop startup");
+    let workspace =
+        Workspace::from_env().expect("Dravyn workspace must resolve before desktop startup");
     let audit_server = AuditServer::start(workspace)
         .expect("local per-profile fingerprint capture server must start");
 
@@ -658,6 +692,8 @@ pub fn run() {
             fingerprint_latest,
             set_fingerprint_baseline,
             network_probe,
+            privacy_status,
+            open_external_verification,
             system_diagnostics,
             open_privacy_audit
         ])
