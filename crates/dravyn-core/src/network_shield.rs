@@ -57,7 +57,7 @@ impl NetworkShieldState {
     }
 
     fn has_live_supervisor(self) -> bool {
-        matches!(Self::Monitoring | Self::Healthy | Self::Degraded, self)
+        matches!(self, Self::Monitoring | Self::Healthy | Self::Degraded)
     }
 }
 
