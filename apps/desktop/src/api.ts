@@ -9,6 +9,9 @@ import type {
   PrivacyStatus,
   ProfileDraft,
   ProfileView,
+  VerificationDraft,
+  VerificationRecord,
+  VerificationSummary,
 } from "./types";
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
@@ -40,6 +43,12 @@ export const api = {
     call<FingerprintSnapshot | null>("fingerprint_latest", { id }),
   setFingerprintBaseline: (id: string) =>
     call<ProfileView>("set_fingerprint_baseline", { id }),
+  verificationHistory: (id: string) =>
+    call<VerificationRecord[]>("verification_history", { id }),
+  verificationSummary: (id: string) =>
+    call<VerificationSummary>("verification_summary", { id }),
+  recordVerification: (id: string, draft: VerificationDraft) =>
+    call<VerificationRecord>("record_verification", { id, draft }),
   networkProbe: (id: string) => call<NetworkProbe>("network_probe", { id }),
   privacyStatus: (id: string) => call<PrivacyStatus>("privacy_status", { id }),
   openExternalVerification: (id: string, test: ExternalVerificationTest) =>
