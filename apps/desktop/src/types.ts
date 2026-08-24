@@ -117,6 +117,9 @@ export interface VerificationSummary {
   profile_id: string;
   record_count: number;
   latest_test_count: number;
+  core_test_count: number;
+  core_pass_count: number;
+  core_complete: boolean;
   pass_count: number;
   warning_count: number;
   critical_count: number;
