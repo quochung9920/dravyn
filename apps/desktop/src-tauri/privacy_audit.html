@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Dravyn Local Privacy Audit</title>
+<style>
+:root{color-scheme:dark;background:#070b14;color:#e7ecf7;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 82% 0%,#172143 0,#090d18 34%,#060912 100%);min-height:100vh}.wrap{max-width:1180px;margin:0 auto;padding:42px 24px 80px}.eyebrow{color:#8d9cff;text-transform:uppercase;letter-spacing:.18em;font-size:11px;font-weight:800}.top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.title{font-size:38px;line-height:1.08;margin:8px 0 10px;letter-spacing:-.04em}.sub{color:#98a4bc;max-width:720px;line-height:1.6}.badge{display:inline-flex;gap:8px;align-items:center;border:1px solid #263353;background:#10172a;padding:9px 12px;border-radius:999px;color:#c9d2e5;font-size:12px}.badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#64dca4;box-shadow:0 0 14px #64dca4}.grid{display:grid;grid-template-columns:260px 1fr;gap:18px;margin-top:28px}.score{border:1px solid #202a42;background:linear-gradient(145deg,#111829,#0b101d);border-radius:20px;padding:22px;position:sticky;top:20px;height:max-content}.scoreNum{font-size:64px;font-weight:800;letter-spacing:-.06em;margin:8px 0 0}.scoreLabel{color:#93a0b9}.bar{height:7px;background:#202a42;border-radius:10px;margin:18px 0 14px;overflow:hidden}.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#6d5dfc,#58d7b0);border-radius:10px;transition:width .5s}.issues{margin:16px 0 0;padding:0;list-style:none}.issues li{font-size:12px;color:#d2a6a6;padding:9px 0;border-top:1px solid #202a42;line-height:1.45}.panel{border:1px solid #202a42;background:#0c111f;border-radius:20px;overflow:hidden}.panelHead{padding:18px 20px;border-bottom:1px solid #202a42;display:flex;justify-content:space-between;align-items:center}.panelHead h2{font-size:15px;margin:0}.panelHead span{font-size:12px;color:#71809d}.rows{display:grid}.row{display:grid;grid-template-columns:170px 110px 1fr;gap:16px;padding:15px 20px;border-bottom:1px solid #171f32;align-items:start}.row:last-child{border-bottom:0}.name{font-weight:700;font-size:13px}.state{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#60d6aa}.state.warn{color:#f1bf70}.value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#aeb9ce;overflow-wrap:anywhere;line-height:1.55}.foot{margin-top:18px;padding:16px 18px;border:1px solid #20304d;border-radius:15px;color:#8491aa;font-size:12px;line-height:1.6;background:#0b111f}.loading{padding:32px;color:#8d99b1}@media(max-width:820px){.grid{grid-template-columns:1fr}.score{position:static}.top{display:block}.badge{margin-top:12px}.row{grid-template-columns:1fr}.state{margin-top:-8px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="eyebrow">Dravyn · Local-only inspector</div><h1 class="title">Privacy & fingerprint audit</h1><div class="sub">Inspect the surfaces exposed by this exact browser profile. Dravyn does not modify, randomize, upload, or spoof these values. Use the report to find privacy leaks and internally inconsistent browser signals.</div></div>
+    <div class="badge">No data leaves this device</div>
+  </div>
+  <div class="grid">
+    <aside class="score"><div class="scoreLabel">Consistency score</div><div class="scoreNum" id="score">—</div><div class="bar"><i id="bar"></i></div><div class="scoreLabel" id="summary">Collecting browser surfaces…</div><ul class="issues" id="issues"></ul></aside>
+    <section class="panel"><div class="panelHead"><h2>Observed surfaces</h2><span id="count">collecting…</span></div><div class="rows" id="rows"><div class="loading">Running local checks…</div></div></section>
+  </div>
+  <div class="foot">This audit is designed for privacy engineering, compatibility testing, and authorized QA. It intentionally does not provide fingerprint spoofing, CAPTCHA/KYC bypass, anti-fraud evasion or identity impersonation.</div>
+</div>
+<script>
+const results=[];const issues=[];
+const text=v=>v===undefined||v===null||v===""?"Unavailable":String(v);
+const add=(name,value,state="ok")=>results.push({name,value:text(value),state});
+const warn=message=>issues.push(message);
+function hash(input){let h=2166136261;for(let i=0;i<input.length;i++){h^=input.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16).padStart(8,"0")}
+async function collect(){
+  const nav=navigator;const scr=screen;const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  add("User-Agent",nav.userAgent);add("Platform",nav.platform);add("Language",nav.language);add("Languages",(nav.languages||[]).join(", "));add("Timezone",tz);
+  add("Screen",`${scr.width} × ${scr.height} · ${scr.colorDepth}-bit · DPR ${devicePixelRatio}`);add("CPU concurrency",nav.hardwareConcurrency||"Unavailable");add("Device memory",nav.deviceMemory?`${nav.deviceMemory} GiB`:"Unavailable");
+  add("Touch capability",`${nav.maxTouchPoints||0} touch points`);add("Automation flag",nav.webdriver===true?"navigator.webdriver = true":"Not exposed",nav.webdriver===true?"warn":"ok");add("Cookies",nav.cookieEnabled?"Enabled":"Disabled",nav.cookieEnabled?"ok":"warn");
+  add("Color scheme",matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");add("Reduced motion",matchMedia("(prefers-reduced-motion: reduce)").matches?"reduce":"no-preference");
+  try{const uaData=nav.userAgentData;if(uaData){const high=uaData.getHighEntropyValues?await uaData.getHighEntropyValues(["architecture","bitness","model","platformVersion","fullVersionList"]):{};add("Client Hints",JSON.stringify({platform:uaData.platform,mobile:uaData.mobile,...high}))}else add("Client Hints","Not exposed","warn")}catch(e){add("Client Hints",`Error: ${e.message}`,"warn")}
+  try{const c=document.createElement("canvas");c.width=320;c.height=80;const x=c.getContext("2d");x.textBaseline="top";x.font="16px Arial";x.fillStyle="#f60";x.fillRect(8,8,62,34);x.fillStyle="#069";x.fillText("Dravyn local canvas audit ✓",12,16);x.globalCompositeOperation="multiply";x.fillStyle="rgba(90,60,220,.65)";x.beginPath();x.arc(100,32,24,0,Math.PI*2);x.fill();add("Canvas render hash",hash(c.toDataURL()))}catch(e){add("Canvas","Unavailable","warn");warn("Canvas rendering could not be inspected.")}
+  try{const c=document.createElement("canvas");const gl=c.getContext("webgl")||c.getContext("experimental-webgl");if(!gl)throw new Error("WebGL unavailable");const ext=gl.getExtension("WEBGL_debug_renderer_info");const vendor=ext?gl.getParameter(ext.UNMASKED_VENDOR_WEBGL):gl.getParameter(gl.VENDOR);const renderer=ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);add("WebGL vendor",vendor);add("WebGL renderer",renderer)}catch(e){add("WebGL",e.message,"warn");warn("WebGL is unavailable or blocked.")}
+  try{const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error("AudioContext unavailable");const ac=new AC();add("AudioContext",`${ac.sampleRate} Hz · ${ac.state}`);await ac.close()}catch(e){add("AudioContext",e.message,"warn")}
+  try{localStorage.setItem("__dravyn_audit","1");localStorage.removeItem("__dravyn_audit");add("Local storage","Available")}catch(e){add("Local storage","Blocked","warn")}
+  try{if(nav.permissions?.query){const p=await nav.permissions.query({name:"geolocation"});add("Geolocation permission",p.state)}else add("Permissions API","Unavailable","warn")}catch(e){add("Permissions API","Restricted","warn")}
+  try{if(!window.RTCPeerConnection)throw new Error("RTCPeerConnection unavailable");const pc=new RTCPeerConnection({iceServers:[]});pc.createDataChannel("audit");const types=new Set();pc.onicecandidate=e=>{if(e.candidate){const m=e.candidate.candidate.match(/ typ ([a-z]+)/);if(m)types.add(m[1])}};await pc.setLocalDescription(await pc.createOffer());await new Promise(r=>setTimeout(r,700));pc.close();add("WebRTC local candidates",types.size?[...types].join(", "):"No host candidate exposed")}catch(e){add("WebRTC",e.message,"warn")}
+  if(nav.webdriver===true)warn("navigator.webdriver is exposed; automated sessions can be distinguishable.");
+  if(nav.languages?.length&&nav.language&&nav.languages[0]!==nav.language)warn("Primary language does not match the first navigator.languages entry.");
+  if(/Windows/i.test(nav.userAgent)&&/Linux|Mac/i.test(nav.platform))warn("User-Agent OS and navigator.platform appear inconsistent.");
+  if(/Linux/i.test(nav.userAgent)&&/Win/i.test(nav.platform))warn("User-Agent OS and navigator.platform appear inconsistent.");
+  if(!tz)warn("Timezone is unavailable.");if(!scr.width||!scr.height)warn("Screen dimensions are unavailable.");if(!nav.hardwareConcurrency||nav.hardwareConcurrency>256)warn("CPU concurrency is missing or outside a typical range.");
+  render();
+}
+function render(){const rows=document.getElementById("rows");rows.innerHTML=results.map(r=>`<div class="row"><div class="name">${escapeHtml(r.name)}</div><div class="state ${r.state}">${r.state==="warn"?"Review":"Observed"}</div><div class="value">${escapeHtml(r.value)}</div></div>`).join("");document.getElementById("count").textContent=`${results.length} surfaces`;const score=Math.max(0,100-issues.length*10);document.getElementById("score").textContent=score;document.getElementById("bar").style.width=`${score}%`;document.getElementById("summary").textContent=issues.length?`${issues.length} consistency/privacy item${issues.length===1?"":"s"} to review`:"No obvious internal inconsistencies detected";document.getElementById("issues").innerHTML=issues.map(i=>`<li>${escapeHtml(i)}</li>`).join("")}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]))}
+collect().catch(e=>{warn(`Audit failed: ${e.message}`);render()});
+</script>
+</body>
+</html>

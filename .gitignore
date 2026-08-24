@@ -1,12 +1,27 @@
-# Rust
+# Rust / Tauri build output
 /target/
+**/target/
 **/*.rs.bk
+apps/desktop/dist/
+apps/desktop/.vite/
+apps/desktop/src-tauri/gen/
+**/*.tsbuildinfo
 
-# Runtime
+# Desktop dependency state generated locally
+# Dravyn intentionally keeps these local to avoid noisy generated-file commits.
+apps/desktop/pnpm-lock.yaml
+apps/desktop/src-tauri/Cargo.lock
+
+# Runtime / generated local state
 /runtime/*
 !/runtime/.gitkeep
+.dravyn/
+profiles/
+logs/
+**/*.pid
+**/.cache/
 
-# Chromium checkout/build
+# Chromium checkout/build (very large; never commit)
 /browser/chromium/
 /browser/out/
 /.chromium/
@@ -14,32 +29,44 @@
 /chromium/
 /out/
 
-# Local Dravyn data
-.dravyn/
-profiles/
-logs/
-
-# Node
+# Node / package-manager generated files
 node_modules/
+**/node_modules/
 .pnpm-store/
+**/.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment
+# Test / coverage output
+coverage/
+playwright-report/
+test-results/
+
+# Environment / local secrets
 .env
 .env.*
 !.env.example
+*.local
 
-# IDE
+# IDE / editor state
 .idea/
 .vscode/
+*.code-workspace
 *.swp
 *.swo
 
-# OS
+# OS metadata
 .DS_Store
 Thumbs.db
 
-# Temporary
+# Temporary files
 tmp/
 temp/
 *.tmp
 *.log
+*~
+
+# Source-of-truth configuration remains tracked:
+# Cargo.toml, package.json, Tauri config, browser config and source assets.
