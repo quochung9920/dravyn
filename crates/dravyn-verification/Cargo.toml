@@ -1,0 +1,9 @@
+[package]
+name = "dravyn-verification"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dravyn-common = { version = "0.1.0", path = "../dravyn-common" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
