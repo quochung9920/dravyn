@@ -7,6 +7,11 @@ apps/desktop/.vite/
 apps/desktop/src-tauri/gen/
 **/*.tsbuildinfo
 
+# Desktop dependency state generated locally
+# Dravyn intentionally keeps these local to avoid noisy generated-file commits.
+apps/desktop/pnpm-lock.yaml
+apps/desktop/src-tauri/Cargo.lock
+
 # Runtime / generated local state
 /runtime/*
 !/runtime/.gitkeep
@@ -63,5 +68,5 @@ temp/
 *.log
 *~
 
-# Keep reproducibility files tracked intentionally:
-# Cargo.lock, pnpm-lock.yaml, package.json, Cargo.toml and Tauri config are source-of-truth files.
+# Source-of-truth configuration remains tracked:
+# Cargo.toml, package.json, Tauri config, browser config and source assets.

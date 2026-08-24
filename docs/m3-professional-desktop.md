@@ -4,7 +4,7 @@ M3 upgrades Dravyn from the initial profile-manager UI into a more complete loca
 
 ## Delivered in M3
 
-- redesigned dashboard and navigation
+- redesigned Dashboard and navigation
 - searchable/sortable profile management
 - profile clone, launch, stop, reset and delete workflows
 - dedicated Network page with local proxy endpoint reachability checks
@@ -22,11 +22,11 @@ The Privacy page can open a generated audit document inside the selected Dravyn 
 $DRAVYN_HOME/runtime/privacy-audit/index.html
 ```
 
-It observes browser-exposed values such as User-Agent, platform, Client Hints, language, timezone, screen, Canvas rendering, WebGL, AudioContext, storage, permissions, WebRTC candidate types, CPU concurrency and touch capability.
+It observes browser-exposed values such as User-Agent, platform, Client Hints, language, timezone, screen, Canvas rendering, WebGL, AudioContext, local storage, permissions, WebRTC candidate types, CPU concurrency and touch capability.
 
-The page performs a small set of consistency checks and displays a score. It does not upload results and it does not modify or spoof browser values.
+The page performs a small set of consistency checks and displays a score. It does not upload results and it does not modify, randomize, or spoof browser values.
 
-This is intentionally a privacy/QA diagnostic feature, not a bypass feature. Dravyn does not provide CAPTCHA/KYC bypass, anti-fraud evasion or identity impersonation.
+This is intentionally a privacy/QA diagnostic feature, not a bypass feature. Dravyn does not provide fingerprint impersonation, CAPTCHA/KYC bypass, anti-fraud evasion or identity impersonation.
 
 ## Network probe
 
@@ -34,13 +34,31 @@ For profiles configured with an explicit proxy, M3 can resolve the proxy hostnam
 
 ## Generated files and Git
 
-The root `.gitignore` now explicitly excludes:
+The root `.gitignore` explicitly excludes:
 
-- Rust/Tauri `target/` trees
-- frontend `dist/` and Vite cache output
+- all Rust/Tauri `target/` trees
+- frontend `dist/`, Vite cache and TypeScript build metadata
 - Node `node_modules/` and pnpm stores
 - Dravyn runtime/profile/log/cache state
 - Chromium source/build workspaces
 - test reports and temporary files
+- `apps/desktop/pnpm-lock.yaml` and `apps/desktop/src-tauri/Cargo.lock`, which are generated locally under the current desktop development policy
 
-Source-of-truth configuration and reproducibility files remain tracked intentionally, including `Cargo.toml`, `package.json`, Tauri configuration, `Cargo.lock`, and future `pnpm-lock.yaml` files.
+Source-of-truth configuration remains tracked, including `Cargo.toml`, `package.json`, Tauri configuration, browser configuration and application source/assets.
+
+## Run M3
+
+```bash
+cd ~/projects/dravyn
+git pull origin main
+cargo install --path crates/dravyn-cli --force
+dravyn desktop
+```
+
+Or during direct desktop development:
+
+```bash
+cd ~/projects/dravyn/apps/desktop
+pnpm install
+pnpm tauri dev
+```
