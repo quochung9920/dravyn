@@ -9,10 +9,13 @@ export type ExternalVerificationTest =
   | "browserleaks_ip"
   | "browserleaks_webrtc"
   | "browserleaks_dns"
+  | "browserleaks_ipv6"
   | "browserleaks_canvas"
   | "browserleaks_webgl"
   | "eff"
   | "amiunique";
+export type VerificationResult = "pass" | "warning" | "critical" | "inconclusive";
+export type VerificationState = "unverified" | "healthy" | "review" | "critical";
 
 export interface ProxyConfig {
   scheme: ProxyScheme;
@@ -26,6 +29,9 @@ export interface NetworkConfig {
 }
 
 export interface PrivacyPolicy {
+  schema_version?: number;
+  policy_version?: number;
+  verification_max_age_hours?: number;
   preset: PrivacyPreset;
   network_guard: NetworkGuardMode;
   webrtc: WebRtcPolicy;
@@ -107,10 +113,44 @@ export interface FingerprintHistoryEntry {
   surface_count: number;
 }
 
+export interface VerificationSummary {
+  profile_id: string;
+  policy_version: number | null;
+  record_count: number;
+  latest_test_count: number;
+  core_test_count: number;
+  core_pass_count: number;
+  core_complete: boolean;
+  pass_count: number;
+  warning_count: number;
+  critical_count: number;
+  inconclusive_count: number;
+  last_verified_at: number | null;
+  state: VerificationState;
+}
+
+export interface VerificationDraft {
+  test: ExternalVerificationTest;
+  result: VerificationResult;
+  expected: string | null;
+  observed: string | null;
+  notes: string;
+  source_url: string | null;
+  chromium_version: string | null;
+  policy_version: number;
+}
+
+export interface VerificationRecord extends VerificationDraft {
+  id: string;
+  profile_id: string;
+  verified_at: number;
+}
+
 export interface ProfileView {
   profile: Profile;
   runtime: RuntimeStatus;
   fingerprint: FingerprintSummary;
+  verification: VerificationSummary;
 }
 
 export interface ProfileDraft {
@@ -129,6 +169,7 @@ export interface AppStatus {
   workspace: string;
   version: string;
   fingerprint_capture_origin: string;
+  verification_store: string;
 }
 
 export interface NetworkProbe {
@@ -158,7 +199,14 @@ export interface PrivacyStatus {
   webrtc_policy: string;
   policy_applied: PrivacyAppliedStatus;
   network_probe: NetworkProbe;
-  overall_status: "critical" | "restart_required" | "verify_external";
+  verification: VerificationSummary;
+  verification_stale: boolean;
+  overall_status:
+    | "critical"
+    | "restart_required"
+    | "verify_external"
+    | "review"
+    | "healthy";
   external_verification_required: boolean;
   message: string;
 }
