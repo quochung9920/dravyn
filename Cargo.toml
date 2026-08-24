@@ -7,5 +7,6 @@ members = [
     "crates/dravyn-profile",
     "crates/dravyn-network",
     "crates/dravyn-fingerprint",
+    "crates/dravyn-privacy",
     "crates/dravyn-common"
 ]
