@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -143,7 +143,6 @@ impl VerificationStore {
         normalize_draft(&mut draft)?;
         self.ensure_layout()?;
 
-        let verified_at = epoch_seconds();
         let record = VerificationRecord {
             id: generate_id(),
             profile_id: profile_id.to_owned(),
@@ -155,7 +154,7 @@ impl VerificationStore {
             source_url: draft.source_url,
             chromium_version: draft.chromium_version,
             policy_version: draft.policy_version,
-            verified_at,
+            verified_at: epoch_seconds(),
         };
 
         let dir = self.history_dir(profile_id);
@@ -174,33 +173,8 @@ impl VerificationStore {
         limit: usize,
     ) -> Result<Vec<VerificationRecord>, VerificationError> {
         validate_profile_id(profile_id)?;
-        let dir = self.history_dir(profile_id);
-        if !dir.is_dir() {
-            return Ok(Vec::new());
-        }
-
-        let mut records = Vec::new();
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            let bytes = fs::read(entry.path())?;
-            let record: VerificationRecord = serde_json::from_slice(&bytes)?;
-            if record.profile_id == profile_id {
-                records.push(record);
-            }
-        }
-        records.sort_by(|left, right| {
-            right
-                .verified_at
-                .cmp(&left.verified_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
-        records.truncate(limit.min(MAX_HISTORY));
+        let mut records = self.read_all(profile_id)?;
+        records.truncate(limit);
         Ok(records)
     }
 
@@ -246,6 +220,36 @@ impl VerificationStore {
         Ok(())
     }
 
+    fn read_all(&self, profile_id: &str) -> Result<Vec<VerificationRecord>, VerificationError> {
+        let dir = self.history_dir(profile_id);
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut records = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = fs::read(entry.path())?;
+            let record: VerificationRecord = serde_json::from_slice(&bytes)?;
+            if record.profile_id == profile_id {
+                records.push(record);
+            }
+        }
+        records.sort_by(|left, right| {
+            right
+                .verified_at
+                .cmp(&left.verified_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(records)
+    }
+
     fn profile_dir(&self, profile_id: &str) -> PathBuf {
         self.workspace.verifications_dir().join(profile_id)
     }
@@ -255,10 +259,7 @@ impl VerificationStore {
     }
 
     fn prune(&self, profile_id: &str) -> Result<(), VerificationError> {
-        let records = self.history(profile_id, usize::MAX)?;
-        if records.len() <= MAX_HISTORY {
-            return Ok(());
-        }
+        let records = self.read_all(profile_id)?;
         for record in records.iter().skip(MAX_HISTORY) {
             let path = self.history_dir(profile_id).join(format!("{}.json", record.id));
             if path.is_file() {
