@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const HISTORY_DIR: &str = "history";
 const MAX_HISTORY: usize = 100;
+const CORE_TEST_COUNT: usize = 4;
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -36,6 +37,16 @@ impl VerificationTest {
             Self::Eff => "EFF Cover Your Tracks",
             Self::Amiunique => "AmIUnique",
         }
+    }
+
+    pub fn is_core(self) -> bool {
+        matches!(
+            self,
+            Self::BrowserleaksIp
+                | Self::BrowserleaksWebrtc
+                | Self::BrowserleaksDns
+                | Self::BrowserleaksIpv6
+        )
     }
 }
 
@@ -95,6 +106,9 @@ pub struct VerificationSummary {
     pub profile_id: String,
     pub record_count: usize,
     pub latest_test_count: usize,
+    pub core_test_count: usize,
+    pub core_pass_count: usize,
+    pub core_complete: bool,
     pub pass_count: usize,
     pub warning_count: usize,
     pub critical_count: usize,
@@ -109,6 +123,9 @@ impl VerificationSummary {
             profile_id: profile_id.to_owned(),
             record_count: 0,
             latest_test_count: 0,
+            core_test_count: 0,
+            core_pass_count: 0,
+            core_complete: false,
             pass_count: 0,
             warning_count: 0,
             critical_count: 0,
@@ -194,6 +211,12 @@ impl VerificationStore {
         summary.latest_test_count = latest.len();
         summary.last_verified_at = history.first().map(|record| record.verified_at);
         for record in latest.values() {
+            if record.test.is_core() {
+                summary.core_test_count += 1;
+                if record.result == VerificationResult::Pass {
+                    summary.core_pass_count += 1;
+                }
+            }
             match record.result {
                 VerificationResult::Pass => summary.pass_count += 1,
                 VerificationResult::Warning => summary.warning_count += 1,
@@ -201,9 +224,14 @@ impl VerificationStore {
                 VerificationResult::Inconclusive => summary.inconclusive_count += 1,
             }
         }
+        summary.core_complete = summary.core_test_count == CORE_TEST_COUNT
+            && summary.core_pass_count == CORE_TEST_COUNT;
         summary.state = if summary.critical_count > 0 {
             VerificationState::Critical
-        } else if summary.warning_count > 0 || summary.inconclusive_count > 0 {
+        } else if summary.warning_count > 0
+            || summary.inconclusive_count > 0
+            || !summary.core_complete
+        {
             VerificationState::Review
         } else {
             VerificationState::Healthy
@@ -390,7 +418,38 @@ mod tests {
     }
 
     #[test]
-    fn records_history_and_latest_summary() {
+    fn healthy_requires_all_four_core_tests_to_pass() {
+        let store = store("core");
+        for test in [
+            VerificationTest::BrowserleaksIp,
+            VerificationTest::BrowserleaksWebrtc,
+            VerificationTest::BrowserleaksDns,
+            VerificationTest::BrowserleaksIpv6,
+        ] {
+            store.record("profile-a", draft(test, VerificationResult::Pass)).unwrap();
+        }
+        let summary = store.summary("profile-a").unwrap();
+        assert!(summary.core_complete);
+        assert_eq!(summary.core_pass_count, 4);
+        assert_eq!(summary.state, VerificationState::Healthy);
+    }
+
+    #[test]
+    fn incomplete_core_coverage_requires_review() {
+        let store = store("incomplete");
+        store
+            .record(
+                "profile-a",
+                draft(VerificationTest::BrowserleaksIp, VerificationResult::Pass),
+            )
+            .unwrap();
+        let summary = store.summary("profile-a").unwrap();
+        assert!(!summary.core_complete);
+        assert_eq!(summary.state, VerificationState::Review);
+    }
+
+    #[test]
+    fn latest_result_replaces_prior_critical_for_summary() {
         let store = store("summary");
         store
             .record(
@@ -404,20 +463,9 @@ mod tests {
                 draft(VerificationTest::BrowserleaksIp, VerificationResult::Pass),
             )
             .unwrap();
-        store
-            .record(
-                "profile-a",
-                draft(VerificationTest::BrowserleaksWebrtc, VerificationResult::Warning),
-            )
-            .unwrap();
-
         let summary = store.summary("profile-a").unwrap();
-        assert_eq!(summary.record_count, 3);
-        assert_eq!(summary.latest_test_count, 2);
-        assert_eq!(summary.pass_count, 1);
-        assert_eq!(summary.warning_count, 1);
         assert_eq!(summary.critical_count, 0);
-        assert_eq!(summary.state, VerificationState::Review);
+        assert_eq!(summary.pass_count, 1);
     }
 
     #[test]
