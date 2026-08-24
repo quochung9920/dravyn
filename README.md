@@ -4,34 +4,31 @@ Dravyn is a local-first browser-core research and development project focused on
 
 ## Current milestone
 
-**M7 - Production Readiness & Assurance** (M0-M6 complete)
+**M8 - Network Shield & Continuous Assurance** (M0-M7 complete)
 
-M7 hardens the M6 commercial privacy workflow around recoverability, schema safety, operator awareness and repeatable validation:
+M8 extends the M7 production-readiness foundation with continuous per-profile route-health supervision and fresher assurance semantics:
 
-- profile metadata now carries an explicit profile schema version
-- validated profile writes keep a last-known-good `profile.json.bak`
-- profile metadata writes flush/sync before replacement
-- syntactically corrupt primary profile metadata automatically recovers from a valid backup when possible
-- existing privacy policy versioning remains separate from profile schema versioning
-- new desktop production-assurance shell around the M6 UI
-- first-run onboarding for runtime readiness, profile setup, fingerprint baseline and remote verification
-- global Healthy / Review / Critical assurance state without collapsing unrelated evidence into one score
-- Assurance Center with Chromium/system readiness, verification state, fingerprint drift and recent state transitions
-- local UI activity timeline for runtime, fingerprint and verification changes
-- explicit `pnpm check` desktop typecheck command
-- one-command local validation with `bash scripts/validate.sh`
-- CI stages now include explicit TypeScript checking, timeouts and Rust test backtraces
+- proxy preflight now uses a bounded total timeout budget across a limited set of resolved addresses
+- Monitor and Strict proxy profiles get a continuous Network Shield supervisor while Dravyn Desktop is running
+- Strict mode trips after three consecutive proxy endpoint failures and terminates the affected Chromium profile
+- strict manual-proxy launches disable QUIC to narrow the UDP transport surface while the route guard is active
+- running profiles reject browser/network/privacy configuration changes until stopped; name, notes and tags remain editable
+- profiles expose verification freshness independently from historical verification state
+- global Assurance Center shows shield state, last check, consecutive failures, fingerprint drift, verification due state and system readiness
+- activity timeline records Network Shield and verification-freshness transitions
+- existing M7 profile schema/recovery, M6 verification journal and M4 fingerprint baseline/history remain intact
 
-M6 capabilities remain intact:
+Earlier commercial-assurance capabilities remain available:
 
 - professional Overview, Profiles, Privacy, Fingerprints, Verification, Network, Diagnostics and Settings workspaces
 - per-profile privacy policy schema/version lifecycle
-- Strict proxy Network Guard fail-closed on endpoint preflight failure
+- Strict proxy preflight fail-closed before launch
 - per-profile fingerprint baseline/history/drift
 - per-profile Verification Journal with Pass / Warning / Critical / Inconclusive results
 - core external verification coverage for Public IP, WebRTC, DNS and IPv6
 - BrowserLeaks/EFF/AmIUnique launch inside the exact selected Dravyn profile
 - cross-profile stable-surface comparison for defensive privacy diagnostics
+- recoverable versioned profile metadata with last-known-good `profile.json.bak`
 
 Dravyn's scope is defensive privacy engineering, local profile isolation, network control, compatibility testing and authorized browser automation. It does not randomize or spoof device identity to impersonate another device, and it is not intended to bypass CAPTCHA, KYC, anti-fraud or abuse controls.
 
@@ -73,7 +70,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-M7 is an application/reliability milestone and reuses `$DRAVYN_HOME/chromium/src/out/Dravyn/chrome`; it does not require rebuilding Chromium.
+M8 changes the application/runtime assurance layer and reuses `$DRAVYN_HOME/chromium/src/out/Dravyn/chrome`; it does not require rebuilding Chromium.
 
 ## Recommended validation
 
@@ -86,7 +83,7 @@ bash scripts/validate.sh
 
 This checks Rust formatting, workspace compilation/tests, desktop dependencies, TypeScript, the Vite production build and the Tauri backend.
 
-## Production-assurance workflow
+## Continuous-assurance workflow
 
 A healthy profile is not determined by one synthetic score. Dravyn keeps the evidence layers separate:
 
@@ -97,26 +94,48 @@ Profile isolation
       +
 Privacy policy enforcement
       +
+Network Shield route health
+      +
 Fingerprint stability/consistency
       +
-Remote verification journal
+Fresh remote verification evidence
 ```
 
 Recommended operating order:
 
 1. Confirm Dravyn Chromium and system diagnostics are ready.
 2. Create or edit a profile and choose its browser route + privacy policy.
-3. Stop/relaunch after privacy-policy changes so policy is applied before browsing.
-4. Open **Privacy** and review local policy/preflight state.
-5. Open **Fingerprints** and establish/review the local baseline.
-6. Open **Verification** and run the core external tests in the exact selected profile.
-7. Record Public IP, WebRTC, DNS and IPv6 results as Pass, Warning, Critical or Inconclusive.
-8. Treat any unexpected real public-network exposure as critical even when other indicators are green.
-9. Re-verify after meaningful browser, network, OS, display or policy changes.
+3. For proxy profiles, choose Off / Monitor / Strict Network Guard.
+4. Launch the profile; Strict mode still performs fail-closed preflight before Chromium starts.
+5. While the desktop app remains running, Network Shield continuously watches Monitor/Strict proxy endpoint health.
+6. Open **Privacy** and review local policy/preflight state.
+7. Open **Fingerprints** and establish/review the local baseline.
+8. Open **Verification** and run the core external tests in the exact selected profile.
+9. Record Public IP, WebRTC, DNS and IPv6 results as Pass, Warning, Critical or Inconclusive.
+10. Re-verify when the configured freshness window expires or after meaningful browser, network, OS, display or policy changes.
 
-A reachable proxy endpoint is not proof of no leak. A stable fingerprint is not proof of anonymity. A local policy match is not proof of what a remote website observes.
+A reachable proxy endpoint is not proof of no leak. Network Shield endpoint health is not an OS firewall. A stable fingerprint is not proof of anonymity. A local policy match is not proof of what a remote website observes.
 
-See [`docs/m7-production-readiness.md`](docs/m7-production-readiness.md), [`docs/m6-commercial-privacy.md`](docs/m6-commercial-privacy.md), [`docs/m5-privacy-leak-guard.md`](docs/m5-privacy-leak-guard.md), and [`docs/m4-per-profile-fingerprints.md`](docs/m4-per-profile-fingerprints.md).
+See [`docs/m8-network-shield.md`](docs/m8-network-shield.md), [`docs/m7-production-readiness.md`](docs/m7-production-readiness.md), [`docs/m6-commercial-privacy.md`](docs/m6-commercial-privacy.md), [`docs/m5-privacy-leak-guard.md`](docs/m5-privacy-leak-guard.md), and [`docs/m4-per-profile-fingerprints.md`](docs/m4-per-profile-fingerprints.md).
+
+## Network Shield behavior
+
+For a running proxy profile:
+
+```text
+Monitor
+  proxy health failure -> report Degraded
+  browser keeps running
+
+Strict
+  proxy health failure 1/3 -> Degraded
+  proxy health failure 2/3 -> Degraded
+  proxy health failure 3/3 -> Tripped -> terminate profile process
+```
+
+A successful probe resets the consecutive failure count.
+
+The current defaults are a 3 second check interval, 900 ms health-check timeout and three consecutive failures before Strict mode trips. See the M8 document for the exact boundary and manual test procedure.
 
 ## Per-profile data model
 
@@ -136,7 +155,10 @@ See [`docs/m7-production-readiness.md`](docs/m7-production-readiness.md), [`docs
 │   └── <profile-id>/
 │       └── history/            # external verification journal, max 100
 └── runtime/
+    └── profile-processes/      # local process records
 ```
+
+Network Shield supervisor state is intentionally in-memory runtime state. A tripped state is visible during the desktop session; durable external evidence remains in the Verification Journal.
 
 The metadata backup is intentionally not a full Chromium user-data backup. Resetting browser data keeps fingerprint/verification history; deleting a profile removes its browser data, fingerprint data and verification journal.
 
@@ -148,10 +170,10 @@ apps/
 
 crates/
   dravyn-cli/           Command-line interface
-  dravyn-core/          Chromium detection and fail-closed runtime orchestration
+  dravyn-core/          Chromium runtime + continuous Network Shield orchestration
   dravyn-common/        Shared types and DRAVYN_HOME workspace resolution
   dravyn-profile/       Persistent profile domain + schema/recovery + policy lifecycle
-  dravyn-network/       Direct/proxy configuration + endpoint preflight
+  dravyn-network/       Direct/proxy configuration + bounded endpoint preflight
   dravyn-fingerprint/   Per-profile baseline, history and drift engine
   dravyn-privacy/       Defensive privacy policy + Chromium preference enforcement
   dravyn-verification/  Per-profile remote-verification journal and latest-result summary
@@ -169,10 +191,10 @@ Source-of-truth files such as `Cargo.toml`, application source, Tauri configurat
 
 ## Current boundary
 
-M7 substantially improves application reliability and product operation, but it still does not claim anonymity or eliminate every browser fingerprint. Dravyn does not yet provide an internet-facing Dravyn-owned verification endpoint, OS-level process egress firewall, production signing/updater infrastructure, OS-keychain-backed proxy credentials or a Chromium regression farm.
+M8 adds a meaningful continuous process kill-switch for strict proxy health, but it still does not claim anonymity or eliminate every browser fingerprint. Dravyn does not yet provide an internet-facing Dravyn-owned verification endpoint, kernel/OS-level process egress firewall, production signing/updater infrastructure, OS-keychain-backed proxy credentials or a Chromium regression farm.
 
 Those capabilities require deployed infrastructure, platform-specific security work and deeper reviewed Chromium/network integration. They should not be represented as complete until they are actually implemented and verified.
 
 ## Status
 
-Early development (`0.1.0-dev`). M7 moves the product closer to production readiness, but release qualification and deeper network/Chromium hardening remain future milestones.
+Early development (`0.1.0-dev`). M8 improves runtime route assurance substantially, but release qualification, remote automated verification and OS/Chromium-level hardening remain future milestones.
