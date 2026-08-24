@@ -1,5 +1,6 @@
 export type NetworkMode = "direct" | "proxy";
 export type ProxyScheme = "http" | "https" | "socks5";
+export type DiagnosticStatus = "ok" | "warning" | "error";
 
 export interface ProxyConfig {
   scheme: ProxyScheme;
@@ -53,4 +54,21 @@ export interface AppStatus {
   chromium_state: string;
   browser_binary: string;
   workspace: string;
+  version: string;
+}
+
+export interface NetworkProbe {
+  mode: string;
+  endpoint: string | null;
+  valid: boolean;
+  reachable: boolean | null;
+  latency_ms: number | null;
+  message: string;
+}
+
+export interface DiagnosticItem {
+  id: string;
+  label: string;
+  status: DiagnosticStatus;
+  detail: string;
 }
