@@ -7,6 +7,10 @@ use dravyn_fingerprint::{
 use dravyn_network::{NetworkMode, NetworkProbeResult, probe_network};
 use dravyn_privacy::{NetworkGuardMode, PrivacyAppliedStatus, inspect_user_data};
 use dravyn_profile::{Profile, ProfileDraft, ProfileStore};
+use dravyn_verification::{
+    VerificationDraft, VerificationRecord, VerificationState, VerificationStore,
+    VerificationSummary,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -19,6 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const PRIVACY_AUDIT_HTML: &str = include_str!("../privacy_audit.html");
 const MAX_HTTP_REQUEST_BYTES: usize = 256 * 1024;
 const NETWORK_PROBE_TIMEOUT: Duration = Duration::from_millis(1_500);
+const VERIFICATION_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Serialize)]
 struct RuntimeView {
@@ -32,6 +37,7 @@ struct ProfileView {
     profile: Profile,
     runtime: RuntimeView,
     fingerprint: FingerprintSummary,
+    verification: VerificationSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +48,7 @@ struct AppStatus {
     workspace: String,
     version: String,
     fingerprint_capture_origin: String,
+    verification_store: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +67,8 @@ struct PrivacyStatusView {
     webrtc_policy: String,
     policy_applied: PrivacyAppliedStatus,
     network_probe: NetworkProbeResult,
+    verification: VerificationSummary,
+    verification_stale: bool,
     overall_status: String,
     external_verification_required: bool,
     message: String,
@@ -126,6 +135,10 @@ fn context() -> Result<(Workspace, ProfileStore, FingerprintStore), String> {
     Ok((workspace, profiles, fingerprints))
 }
 
+fn verification_store(workspace: &Workspace) -> VerificationStore {
+    VerificationStore::new(workspace.clone())
+}
+
 fn view(
     workspace: &Workspace,
     profiles: &ProfileStore,
@@ -137,6 +150,9 @@ fn view(
     let fingerprint = fingerprints
         .summary(&profile.id)
         .map_err(|error| error.to_string())?;
+    let verification = verification_store(workspace)
+        .summary(&profile.id)
+        .map_err(|error| error.to_string())?;
     Ok(ProfileView {
         profile,
         runtime: RuntimeView {
@@ -145,11 +161,19 @@ fn view(
             started_at: runtime.started_at,
         },
         fingerprint,
+        verification,
     })
 }
 
 fn enum_label<T: std::fmt::Debug>(value: T) -> String {
     format!("{value:?}").to_lowercase()
+}
+
+fn verification_is_stale(summary: &VerificationSummary) -> bool {
+    match summary.last_verified_at {
+        Some(last) => epoch_seconds().saturating_sub(last) > VERIFICATION_MAX_AGE_SECS,
+        None => true,
+    }
 }
 
 #[tauri::command]
@@ -163,6 +187,7 @@ fn app_status(server: tauri::State<'_, AuditServer>) -> Result<AppStatus, String
         workspace: workspace.root().display().to_string(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         fingerprint_capture_origin: server.origin(),
+        verification_store: workspace.verifications_dir().display().to_string(),
     })
 }
 
@@ -238,6 +263,9 @@ fn delete_profile(id: String) -> Result<(), String> {
     profiles.delete(&id).map_err(|error| error.to_string())?;
     fingerprints
         .clear_profile(&id)
+        .map_err(|error| error.to_string())?;
+    verification_store(&workspace)
+        .clear_profile(&id)
         .map_err(|error| error.to_string())
 }
 
@@ -268,6 +296,33 @@ fn set_fingerprint_baseline(id: String) -> Result<ProfileView, String> {
 }
 
 #[tauri::command]
+fn verification_history(id: String) -> Result<Vec<VerificationRecord>, String> {
+    let (workspace, profiles, _) = context()?;
+    profiles.get(&id).map_err(|error| error.to_string())?;
+    verification_store(&workspace)
+        .history(&id, 50)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn verification_summary(id: String) -> Result<VerificationSummary, String> {
+    let (workspace, profiles, _) = context()?;
+    profiles.get(&id).map_err(|error| error.to_string())?;
+    verification_store(&workspace)
+        .summary(&id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn record_verification(id: String, draft: VerificationDraft) -> Result<VerificationRecord, String> {
+    let (workspace, profiles, _) = context()?;
+    profiles.get(&id).map_err(|error| error.to_string())?;
+    verification_store(&workspace)
+        .record(&id, draft)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn network_probe(id: String) -> Result<NetworkProbeResult, String> {
     let (_, profiles, _) = context()?;
     let profile = profiles.get(&id).map_err(|error| error.to_string())?;
@@ -276,7 +331,7 @@ fn network_probe(id: String) -> Result<NetworkProbeResult, String> {
 
 #[tauri::command]
 fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
-    let (_, profiles, _) = context()?;
+    let (workspace, profiles, _) = context()?;
     let profile = profiles.get(&id).map_err(|error| error.to_string())?;
     let user_data = profiles
         .user_data_dir(&profile.id)
@@ -284,24 +339,52 @@ fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
     let policy_applied = inspect_user_data(&user_data, &profile.privacy)
         .map_err(|error| error.to_string())?;
     let network_probe = probe_network(&profile.network, NETWORK_PROBE_TIMEOUT);
+    let verification = verification_store(&workspace)
+        .summary(&profile.id)
+        .map_err(|error| error.to_string())?;
+    let verification_stale = verification_is_stale(&verification);
 
     let strict_proxy_failure = profile.privacy.network_guard == NetworkGuardMode::Strict
         && profile.network.mode == NetworkMode::Proxy
         && network_probe.reachable != Some(true);
-    let (overall_status, message) = if strict_proxy_failure {
+    let (overall_status, external_verification_required, message) = if strict_proxy_failure {
         (
             "critical".to_owned(),
+            true,
             "Strict Network Guard would block launch because the configured proxy endpoint did not pass preflight.".to_owned(),
         )
     } else if !policy_applied.applied {
         (
             "restart_required".to_owned(),
+            true,
             "Stored Chromium preferences do not yet match this profile's privacy policy. Stop and relaunch the profile to apply the policy before browsing.".to_owned(),
+        )
+    } else if verification.state == VerificationState::Critical {
+        (
+            "critical".to_owned(),
+            true,
+            "The latest external verification journal contains a critical result. Review it before treating this profile as healthy.".to_owned(),
+        )
+    } else if verification.state == VerificationState::Review {
+        (
+            "review".to_owned(),
+            true,
+            "Local policy is applied, but the latest external verification results contain warnings or inconclusive checks.".to_owned(),
+        )
+    } else if verification.state == VerificationState::Unverified
+        || verification_stale
+        || verification.latest_test_count < 4
+    {
+        (
+            "verify_external".to_owned(),
+            true,
+            "Local privacy policy is applied. Complete or refresh external verification for public IP, WebRTC, DNS and IPv6 before considering the profile verified.".to_owned(),
         )
     } else {
         (
-            "verify_external".to_owned(),
-            "Local privacy policy is applied. Use External Verification in this exact profile to confirm public IP, WebRTC, DNS and IPv6 exposure as seen by real websites.".to_owned(),
+            "healthy".to_owned(),
+            false,
+            "Local policy is applied and the current verification journal has no warning or critical results. Re-verify after material environment, browser or network changes.".to_owned(),
         )
     };
 
@@ -312,8 +395,10 @@ fn privacy_status(id: String) -> Result<PrivacyStatusView, String> {
         webrtc_policy: enum_label(profile.privacy.webrtc),
         policy_applied,
         network_probe,
+        verification,
+        verification_stale,
         overall_status,
-        external_verification_required: true,
+        external_verification_required,
         message,
     })
 }
@@ -333,6 +418,7 @@ fn external_test_url(test: &str) -> Option<&'static str> {
         "browserleaks_ip" => Some("https://browserleaks.com/ip"),
         "browserleaks_webrtc" => Some("https://browserleaks.com/webrtc"),
         "browserleaks_dns" => Some("https://browserleaks.com/dns"),
+        "browserleaks_ipv6" => Some("https://browserleaks.com/ip"),
         "browserleaks_canvas" => Some("https://browserleaks.com/canvas"),
         "browserleaks_webgl" => Some("https://browserleaks.com/webgl"),
         "eff" => Some("https://coveryourtracks.eff.org/"),
@@ -419,6 +505,14 @@ fn system_diagnostics(server: tauri::State<'_, AuditServer>) -> Result<Vec<Diagn
         label: "Per-profile fingerprint store".to_owned(),
         status: if fingerprints_ready { "ok" } else { "error" }.to_owned(),
         detail: workspace.fingerprints_dir().display().to_string(),
+    });
+
+    let verifications_ready = verification_store(&workspace).ensure_layout().is_ok();
+    items.push(DiagnosticItem {
+        id: "verifications".to_owned(),
+        label: "Verification journal".to_owned(),
+        status: if verifications_ready { "ok" } else { "error" }.to_owned(),
+        detail: workspace.verifications_dir().display().to_string(),
     });
 
     let runtime_ready = fs::create_dir_all(workspace.runtime_dir()).is_ok();
@@ -670,6 +764,13 @@ fn capture_token() -> String {
     format!("{nanos:032x}-{:08x}", std::process::id())
 }
 
+fn epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let workspace =
@@ -691,6 +792,9 @@ pub fn run() {
             fingerprint_history,
             fingerprint_latest,
             set_fingerprint_baseline,
+            verification_history,
+            verification_summary,
+            record_verification,
             network_probe,
             privacy_status,
             open_external_verification,
