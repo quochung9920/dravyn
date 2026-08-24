@@ -13,6 +13,8 @@ const CHROME_BINARY_NAME: &str = "chrome";
 const REVISION_FILE_NAME: &str = "revision.txt";
 const RUNTIME_COMPONENT: &str = "runtime";
 const DEV_PROFILE_COMPONENT: &str = "dev-profile";
+const PROFILES_COMPONENT: &str = "profiles";
+const PROFILE_RUNTIME_COMPONENT: &str = "profile-processes";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
@@ -64,10 +66,20 @@ impl Workspace {
         self.chromium_dir().join(REVISION_FILE_NAME)
     }
 
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.root.join(RUNTIME_COMPONENT)
+    }
+
     pub fn dev_profile(&self) -> PathBuf {
-        self.root
-            .join(RUNTIME_COMPONENT)
-            .join(DEV_PROFILE_COMPONENT)
+        self.runtime_dir().join(DEV_PROFILE_COMPONENT)
+    }
+
+    pub fn profiles_dir(&self) -> PathBuf {
+        self.root.join(PROFILES_COMPONENT)
+    }
+
+    pub fn profile_runtime_dir(&self) -> PathBuf {
+        self.runtime_dir().join(PROFILE_RUNTIME_COMPONENT)
     }
 }
 
@@ -175,6 +187,11 @@ mod tests {
         assert_eq!(
             ws.dev_profile(),
             PathBuf::from("/data/dravyn/runtime/dev-profile")
+        );
+        assert_eq!(ws.profiles_dir(), PathBuf::from("/data/dravyn/profiles"));
+        assert_eq!(
+            ws.profile_runtime_dir(),
+            PathBuf::from("/data/dravyn/runtime/profile-processes")
         );
     }
 

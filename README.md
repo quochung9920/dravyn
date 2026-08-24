@@ -4,12 +4,19 @@ Dravyn is a local-first browser-core research and development project focused on
 
 ## Current milestone
 
-**M1 - Chromium Foundation** (M0 complete)
+**M2 - Desktop Profile Manager** (M0/M1 complete)
 
-- `dravyn` CLI with environment diagnostics
-- Chromium workspace management under `$DRAVYN_HOME`
-- depot_tools bootstrap, upstream Chromium checkout, GN configure,
-  resource-aware build, WSLg launch - all via CLI or scripts
+M1 established a reproducible Chromium checkout/build/run path. M2 adds the first usable Dravyn application layer:
+
+- persistent isolated profiles under `$DRAVYN_HOME/profiles`
+- one Chromium `--user-data-dir` per profile
+- profile launch/stop/status with guarded PID tracking on Linux/WSLg
+- direct or explicit HTTP/HTTPS/SOCKS5 proxy configuration
+- profile reset/delete safeguards
+- a Tauri 2 + React/TypeScript desktop control panel
+- CLI commands that share the same Rust profile/runtime implementation
+
+Dravyn's scope is privacy, local profile isolation, network control, compatibility testing, and authorized browser automation. It is not intended to bypass identity verification, CAPTCHA systems, KYC, anti-fraud controls, or third-party abuse protections.
 
 ## Quick start
 
@@ -18,54 +25,82 @@ git clone https://github.com/quochung9920/dravyn.git
 cd dravyn
 
 cargo test --workspace
-
 cargo install --path crates/dravyn-cli --force
 
 dravyn doctor
-
 dravyn chromium status
 ```
 
-## M1 workflow
+### Chromium foundation
 
 ```bash
-# 1. Install depot_tools and fetch the Chromium source (~tens of GiB)
+# First-time Chromium source/dependency setup
 dravyn chromium bootstrap
 
-# 2. Generate the build configuration from browser/config/args.gn
+# Generate out/Dravyn
 dravyn chromium configure
 
-# 3. Build the chrome target (RAM-aware parallelism; takes hours)
+# Build the chrome target
 dravyn chromium build
 
-# 4. Launch through WSLg with a clean development profile
+# Launch the development profile
 dravyn chromium run
 ```
 
-Every step is idempotent and also available as a standalone script:
-`scripts/chromium-{bootstrap,configure,build,run}.sh --help`.
+### Dravyn Desktop
 
-Details: [docs/chromium.md](docs/chromium.md).
+After Chromium has been built successfully, install the Tauri Linux dependencies described in [`docs/m2-desktop.md`](docs/m2-desktop.md), then:
+
+```bash
+dravyn desktop
+```
+
+The desktop app reuses `$DRAVYN_HOME/chromium/src/out/Dravyn/chrome`; frontend/profile-manager changes do not require rebuilding Chromium.
+
+### Profile CLI
+
+```bash
+dravyn profile list
+dravyn profile create "QA profile" --start-url https://example.com
+dravyn profile launch <id>
+dravyn profile stop <id>
+```
 
 ## Repository layout
 
 ```text
+apps/
+  desktop/          Tauri 2 + React/TypeScript Dravyn control panel
+
 crates/
   dravyn-cli/       Command-line interface
-  dravyn-core/      Diagnostics, Chromium state detection, build orchestration
-  dravyn-common/    Shared types; DRAVYN_HOME workspace resolution
-  dravyn-profile/   Profile-domain foundation
-  dravyn-network/   Network-policy foundation
+  dravyn-core/      Diagnostics, Chromium state detection, runtime orchestration
+  dravyn-common/    Shared types and DRAVYN_HOME workspace resolution
+  dravyn-profile/   Persistent profile domain + storage
+  dravyn-network/   Explicit direct/proxy network configuration
 
-browser/            Chromium configuration of record + future patch sets
-scripts/            Development helpers (bootstrap/configure/build/run)
-docs/               Architecture, roadmap, Chromium workflow documentation
+browser/            Chromium configuration of record + future reviewed patch sets
+scripts/            Development helpers
+docs/               Architecture, roadmap, Chromium and desktop workflow docs
 ```
 
-## Scope
+## Chromium workspace
 
-Dravyn is being built around local profile isolation, network control, privacy, compatibility testing, and authorized browser automation. It is not intended to provide mechanisms for bypassing identity verification, CAPTCHA systems, or third-party anti-fraud controls.
+Large Chromium sources/build outputs never enter this repository. By default they live at `~/.cache/dravyn`:
+
+```text
+~/.cache/dravyn/
+├── depot_tools/
+├── chromium/
+│   └── src/out/Dravyn/chrome
+├── profiles/
+└── runtime/
+```
+
+Override this with `DRAVYN_HOME` when needed.
+
+See [`docs/chromium.md`](docs/chromium.md) for the Chromium workflow and [`docs/m2-desktop.md`](docs/m2-desktop.md) for the desktop/profile-manager workflow.
 
 ## Status
 
-Early development (`0.1.0-dev`). APIs and file formats may change without notice.
+Early development (`0.1.0-dev`). APIs, profile schema, and desktop UI may change without notice.

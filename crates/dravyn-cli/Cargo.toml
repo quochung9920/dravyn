@@ -12,3 +12,5 @@ anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 dravyn-common = { version = "0.1.0", path = "../dravyn-common" }
 dravyn-core = { version = "0.1.0", path = "../dravyn-core" }
+dravyn-network = { version = "0.1.0", path = "../dravyn-network" }
+dravyn-profile = { version = "0.1.0", path = "../dravyn-profile" }
