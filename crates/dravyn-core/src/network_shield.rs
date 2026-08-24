@@ -55,6 +55,10 @@ impl NetworkShieldState {
             Self::Tripped => "tripped",
         }
     }
+
+    fn has_live_supervisor(self) -> bool {
+        matches!(Self::Monitoring | Self::Healthy | Self::Degraded, self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +101,8 @@ impl NetworkShieldSupervisor {
             let entries = self.entries.lock().ok()?;
             Arc::clone(&entries.get(profile_id)?.snapshot)
         };
-        snapshot.lock().ok().map(|value| value.clone())
+        let value = snapshot.lock().ok()?.clone();
+        Some(value)
     }
 
     pub fn disarm(&self, profile_id: &str) {
@@ -139,7 +144,7 @@ impl NetworkShieldSupervisor {
             let compatible = existing.policy_version == profile.privacy.policy_version
                 && existing.mode == mode
                 && existing.endpoint == endpoint
-                && existing.state != NetworkShieldState::Tripped;
+                && existing.state.has_live_supervisor();
             if compatible {
                 return Ok(existing);
             }
